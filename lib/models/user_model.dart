@@ -16,7 +16,7 @@ class UserModel {
   });
 
   bool get isAdmin    => roleDesc == 'Admin';
-  bool get isResident => roleId == 7;
+  bool get isResident => roleId == 7 || roleDesc.toLowerCase() == 'resident';
 
   factory UserModel.fromMap(Map<String, dynamic> map) {
     return UserModel(

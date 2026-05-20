@@ -16,7 +16,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
   late List<NotificationLog> _logs;
   String _filter = 'ALL';
 
-  static final _typeColors = {
+  static const _typeColors = {
     NotificationType.critical: AppColors.red,
     NotificationType.warning:  AppColors.orange,
     NotificationType.advisory: AppColors.yellow,
@@ -38,78 +38,157 @@ class _AlertsScreenState extends State<AlertsScreen> {
   void _sendManualAlert(BuildContext context) {
     String selectedType = 'INFO';
     final msgCtrl = TextEditingController();
+    final user = context.read<AuthService>().currentUser;
 
-    showDialog(
+    showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.blueDark,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
       builder: (_) => StatefulBuilder(
-        builder: (ctx, setD) => AlertDialog(
-          backgroundColor: AppColors.blueDark,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          title: const Text('📢 Send Manual Alert',
-              style: TextStyle(color: AppColors.textPrimary)),
-          content: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Align(alignment: Alignment.centerLeft,
-                child: Text('ALERT TYPE', style: TextStyle(color: AppColors.textMuted, fontSize: 11, letterSpacing: 0.8))),
-            const SizedBox(height: 6),
-            DropdownButtonFormField<String>(
-              initialValue: selectedType,
-              dropdownColor: AppColors.blueMid,
-              style: const TextStyle(color: AppColors.textPrimary),
-              decoration: InputDecoration(
-                filled: true, fillColor: AppColors.blueMid,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: AppColors.blueBorder)),
+        builder: (ctx, setD) => Padding(
+          padding: EdgeInsets.only(
+            left: 20, right: 20, top: 20,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Handle
+              Center(
+                child: Container(
+                  width: 40, height: 4,
+                  decoration: BoxDecoration(
+                    color: AppColors.blueBorder,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
               ),
-              items: ['INFO', 'ADVISORY', 'WARNING', 'CRITICAL']
-                  .map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
-              onChanged: (v) => setD(() => selectedType = v!),
-            ),
-            const SizedBox(height: 14),
-            const Align(alignment: Alignment.centerLeft,
-                child: Text('MESSAGE', style: TextStyle(color: AppColors.textMuted, fontSize: 11, letterSpacing: 0.8))),
-            const SizedBox(height: 6),
-            TextField(
-              controller: msgCtrl,
-              maxLines: 3,
-              style: const TextStyle(color: AppColors.textPrimary),
-              decoration: InputDecoration(
-                hintText: 'Enter your alert message...',
-                hintStyle: const TextStyle(color: AppColors.textMuted),
-                filled: true, fillColor: AppColors.blueMid,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: AppColors.blueBorder)),
+              const SizedBox(height: 16),
+              const Text('📢 Send Alert to Residents',
+                  style: TextStyle(color: AppColors.textPrimary, fontSize: 17, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 4),
+              const Text('This alert will appear in all residents\' inboxes immediately.',
+                  style: TextStyle(color: AppColors.textMuted, fontSize: 12)),
+              const SizedBox(height: 20),
+
+              // Type selector
+              const Text('ALERT TYPE', style: TextStyle(color: AppColors.textMuted, fontSize: 11, letterSpacing: 0.8, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8, runSpacing: 8,
+                children: ['INFO', 'ADVISORY', 'WARNING', 'CRITICAL'].map((t) {
+                  final colors = {
+                    'INFO': AppColors.accent,
+                    'ADVISORY': AppColors.yellow,
+                    'WARNING': AppColors.orange,
+                    'CRITICAL': AppColors.red,
+                  };
+                  final c = colors[t]!;
+                  final selected = selectedType == t;
+                  return GestureDetector(
+                    onTap: () => setD(() => selectedType = t),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: selected ? c.withOpacity(0.2) : AppColors.blueMid,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: selected ? c : AppColors.blueBorder, width: selected ? 1.5 : 1),
+                      ),
+                      child: Text(t, style: TextStyle(
+                        color: selected ? c : AppColors.textSecondary,
+                        fontSize: 12, fontWeight: FontWeight.w700,
+                      )),
+                    ),
+                  );
+                }).toList(),
               ),
-            ),
-          ]),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel', style: TextStyle(color: AppColors.textMuted))),
-            ElevatedButton(
-              onPressed: () {
-                if (msgCtrl.text.trim().isEmpty) return;
-                final typeMap = {
-                  'CRITICAL': NotificationType.critical,
-                  'WARNING':  NotificationType.warning,
-                  'ADVISORY': NotificationType.advisory,
-                  'INFO':     NotificationType.info,
-                };
-                setState(() {
-                  _logs.insert(0, NotificationLog(
-                    id: DateTime.now().millisecondsSinceEpoch,
-                    time: 'Just now',
-                    type: typeMap[selectedType] ?? NotificationType.info,
-                    message: msgCtrl.text.trim(),
-                    sentBy: 'Manual (Admin)',
-                    read: true,
-                  ));
-                });
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('✅ Alert sent!'), backgroundColor: AppColors.green),
-                );
-              },
-              style: ElevatedButton.styleFrom(backgroundColor: AppColors.accent, foregroundColor: AppColors.blueDark),
-              child: const Text('📨 Send Alert'),
-            ),
-          ],
+              const SizedBox(height: 16),
+
+              // Message field
+              const Text('MESSAGE', style: TextStyle(color: AppColors.textMuted, fontSize: 11, letterSpacing: 0.8, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              TextField(
+                controller: msgCtrl,
+                maxLines: 4,
+                style: const TextStyle(color: AppColors.textPrimary, fontSize: 14),
+                decoration: InputDecoration(
+                  hintText: 'Type your alert message for residents...',
+                  hintStyle: const TextStyle(color: AppColors.textMuted),
+                  filled: true,
+                  fillColor: AppColors.blueMid,
+                  contentPadding: const EdgeInsets.all(14),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(color: AppColors.blueBorder),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(color: AppColors.blueBorder),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    borderSide: const BorderSide(color: AppColors.accent),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              // Send button
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    if (msgCtrl.text.trim().isEmpty) return;
+                    final typeMap = {
+                      'CRITICAL': NotificationType.critical,
+                      'WARNING':  NotificationType.warning,
+                      'ADVISORY': NotificationType.advisory,
+                      'INFO':     NotificationType.info,
+                    };
+                    final newLog = NotificationLog(
+                      id: DateTime.now().millisecondsSinceEpoch,
+                      time: 'Just now',
+                      type: typeMap[selectedType] ?? NotificationType.info,
+                      message: msgCtrl.text.trim(),
+                      sentBy: user?.name ?? 'Official',
+                      read: false,
+                    );
+                    // Add to local log
+                    setState(() => _logs.insert(0, newLog));
+                    // Broadcast to resident alert bus
+                    AlertBus.send(NotificationLog(
+                      id: newLog.id,
+                      time: newLog.time,
+                      type: newLog.type,
+                      message: newLog.message,
+                      sentBy: newLog.sentBy,
+                      read: false,
+                    ));
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('✅ Alert sent to all residents!'),
+                        backgroundColor: AppColors.green,
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    );
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.accent,
+                    foregroundColor: AppColors.blueDark,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  icon: const Icon(Icons.send_rounded, size: 18),
+                  label: const Text('Send Alert Now', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -117,158 +196,184 @@ class _AlertsScreenState extends State<AlertsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final user = context.watch<AuthService>().currentUser;
-    final isResident = user?.isResident ?? false;
     final critical = _logs.where((l) => l.type == NotificationType.critical).length;
+    final thisSession = _logs.where((l) => l.time == 'Just now').length;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
-      child: Column(children: [
-        // ── KPIs ─────────────────────────────────────────────
-        GridView.count(
-          shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
-          crossAxisCount: MediaQuery.of(context).size.width > 600 ? 4 : 2,
-          childAspectRatio: 1.4, mainAxisSpacing: 12, crossAxisSpacing: 12,
-          children: [
-            _KpiCard(icon: '🔔', label: 'Total Alerts', value: '${_logs.length}', color: AppColors.accent),
-            _KpiCard(icon: '📬', label: 'Unread', value: '$_unread', color: _unread > 0 ? AppColors.orange : AppColors.green),
-            _KpiCard(icon: '🔴', label: 'Critical Sent', value: '$critical', color: AppColors.red),
-            _KpiCard(icon: '📤', label: 'This Session', value: '${_logs.where((l) => l.time == "Just now").length}', color: AppColors.textSecondary),
-          ],
-        ),
-        const SizedBox(height: 16),
-
-        // ── Log Card ──────────────────────────────────────────
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: AppColors.blueCard, borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: AppColors.blueBorder),
+      child: Column(
+        children: [
+          // ── KPIs ──────────────────────────────────────────────
+          GridView.count(
+            shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
+            crossAxisCount: MediaQuery.of(context).size.width > 600 ? 4 : 2,
+            childAspectRatio: 1.5,
+            mainAxisSpacing: 12, crossAxisSpacing: 12,
+            children: [
+              _KpiCard(icon: '🔔', label: 'Total', value: '${_logs.length}', color: AppColors.accent),
+              _KpiCard(icon: '📬', label: 'Unread', value: '$_unread',
+                  color: _unread > 0 ? AppColors.orange : AppColors.green),
+              _KpiCard(icon: '🔴', label: 'Critical', value: '$critical', color: AppColors.red),
+              _KpiCard(icon: '📤', label: 'Sent Now', value: '$thisSession', color: AppColors.textSecondary),
+            ],
           ),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              const Text('🔔 Notification Log',
-                  style: TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w700, fontSize: 14)),
-              if (_unread > 0) ...[
-                const SizedBox(width: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: AppColors.orange.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: AppColors.orange.withOpacity(0.3)),
-                  ),
-                  child: Text('$_unread unread',
-                      style: const TextStyle(color: AppColors.orange, fontSize: 11, fontWeight: FontWeight.w700)),
-                ),
-              ],
-            ]),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 6, runSpacing: 6,
-              children: [
-                ...['ALL', 'CRITICAL', 'WARNING', 'ADVISORY', 'INFO'].map((f) => GestureDetector(
-                  onTap: () => setState(() => _filter = f),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: _filter == f ? AppColors.accent : AppColors.blueMid,
-                      borderRadius: BorderRadius.circular(6),
-                      border: Border.all(color: _filter == f ? AppColors.accent : AppColors.blueBorder),
-                    ),
-                    child: Text(f, style: TextStyle(
-                      color: _filter == f ? AppColors.blueDark : AppColors.textSecondary,
-                      fontSize: 11, fontWeight: FontWeight.w600,
-                    )),
-                  ),
-                )),
-                GestureDetector(
-                  onTap: () => setState(() => _logs = _logs.map((l) => NotificationLog(id: l.id, time: l.time, type: l.type, message: l.message, sentBy: l.sentBy, read: true)).toList()),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                    decoration: BoxDecoration(color: AppColors.blueMid, borderRadius: BorderRadius.circular(6), border: Border.all(color: AppColors.blueBorder)),
-                    child: const Text('✓ Mark All Read', style: TextStyle(color: AppColors.textSecondary, fontSize: 11, fontWeight: FontWeight.w600)),
-                  ),
-                ),
-                if (!isResident)
-                  GestureDetector(
-                    onTap: () => _sendManualAlert(context),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                      decoration: BoxDecoration(color: AppColors.accent, borderRadius: BorderRadius.circular(6)),
-                      child: const Text('+ Send Alert', style: TextStyle(color: AppColors.blueDark, fontSize: 11, fontWeight: FontWeight.w700)),
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 14),
+          const SizedBox(height: 16),
 
-            if (_filtered.isEmpty)
-              const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(32),
-                  child: Text('No alerts found.', style: TextStyle(color: AppColors.textMuted, fontSize: 14)),
-                ),
-              )
-            else
-              ..._filtered.map((log) {
-                final color = _typeColors[log.type] ?? AppColors.accent;
-                return GestureDetector(
-                  onTap: () => setState(() => log.read = true),
-                  child: Container(
-                    margin: const EdgeInsets.only(bottom: 8),
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: log.read ? AppColors.blueMid : color.withOpacity(0.08),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: log.read ? AppColors.blueBorder : color.withOpacity(0.4)),
-                    ),
-                    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(log.typeIcon, style: const TextStyle(fontSize: 16)),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Text(log.message,
-                              style: TextStyle(
-                                color: log.read ? AppColors.textSecondary : AppColors.textPrimary,
-                                fontWeight: log.read ? FontWeight.w400 : FontWeight.w600,
-                                fontSize: 13, height: 1.4,
-                              )),
-                          const SizedBox(height: 5),
-                          Row(children: [
-                            Text('🕐 ${log.time}', style: const TextStyle(color: AppColors.textMuted, fontSize: 11)),
-                            const SizedBox(width: 10),
-                            Text('👤 ${log.sentBy}', style: const TextStyle(color: AppColors.textMuted, fontSize: 11)),
-                            const SizedBox(width: 10),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                              decoration: BoxDecoration(
-                                color: color.withOpacity(0.12),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(log.typeLabel, style: TextStyle(color: color, fontSize: 9, fontWeight: FontWeight.w700)),
-                            ),
-                          ]),
-                        ]),
-                      ),
-                      if (!log.read)
-                        Container(
-                          width: 8, height: 8,
-                          margin: const EdgeInsets.only(top: 4),
-                          decoration: BoxDecoration(shape: BoxShape.circle, color: color),
-                        ),
-                    ]),
-                  ),
-                );
-              }),
-            const SizedBox(height: 8),
-            const Text(
-              '📝 Logs are stored locally per session. In production, this would be saved to a database.',
-              style: TextStyle(color: AppColors.textMuted, fontSize: 11),
+          // ── Send Alert Button ─────────────────────────────────
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: () => _sendManualAlert(context),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.accent,
+                foregroundColor: AppColors.blueDark,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              icon: const Icon(Icons.campaign_rounded, size: 20),
+              label: const Text('Send Alert to Residents',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800)),
             ),
-          ]),
-        ),
-      ]),
+          ),
+          const SizedBox(height: 16),
+
+          // ── Log Card ──────────────────────────────────────────
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppColors.blueCard, borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: AppColors.blueBorder),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text('🔔 Alert Log',
+                          style: TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w700, fontSize: 14)),
+                    ),
+                    if (_unread > 0)
+                      GestureDetector(
+                        onTap: () => setState(() {
+                          _logs = _logs.map((l) => NotificationLog(
+                            id: l.id, time: l.time, type: l.type,
+                            message: l.message, sentBy: l.sentBy, read: true,
+                          )).toList();
+                        }),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: AppColors.blueMid,
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: AppColors.blueBorder),
+                          ),
+                          child: const Text('✓ Mark all read',
+                              style: TextStyle(color: AppColors.textSecondary, fontSize: 10, fontWeight: FontWeight.w600)),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+
+                // Filter chips
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: ['ALL', 'CRITICAL', 'WARNING', 'ADVISORY', 'INFO'].map((f) =>
+                      GestureDetector(
+                        onTap: () => setState(() => _filter = f),
+                        child: Container(
+                          margin: const EdgeInsets.only(right: 6),
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: _filter == f ? AppColors.accent : AppColors.blueMid,
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: _filter == f ? AppColors.accent : AppColors.blueBorder),
+                          ),
+                          child: Text(f, style: TextStyle(
+                            color: _filter == f ? AppColors.blueDark : AppColors.textSecondary,
+                            fontSize: 11, fontWeight: FontWeight.w600,
+                          )),
+                        ),
+                      ),
+                    ).toList(),
+                  ),
+                ),
+                const SizedBox(height: 14),
+
+                if (_filtered.isEmpty)
+                  const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(32),
+                      child: Text('No alerts found.',
+                          style: TextStyle(color: AppColors.textMuted, fontSize: 14)),
+                    ),
+                  )
+                else
+                  ..._filtered.map((log) {
+                    final color = _typeColors[log.type] ?? AppColors.accent;
+                    return GestureDetector(
+                      onTap: () => setState(() => log.read = true),
+                      child: Container(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: log.read ? AppColors.blueMid : color.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: log.read ? AppColors.blueBorder : color.withOpacity(0.4)),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(log.typeIcon, style: const TextStyle(fontSize: 16)),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(log.message,
+                                      style: TextStyle(
+                                        color: log.read ? AppColors.textSecondary : AppColors.textPrimary,
+                                        fontWeight: log.read ? FontWeight.w400 : FontWeight.w600,
+                                        fontSize: 13, height: 1.4,
+                                      )),
+                                  const SizedBox(height: 5),
+                                  Wrap(
+                                    spacing: 8,
+                                    children: [
+                                      Text('🕐 ${log.time}', style: const TextStyle(color: AppColors.textMuted, fontSize: 11)),
+                                      Text('👤 ${log.sentBy}', style: const TextStyle(color: AppColors.textMuted, fontSize: 11)),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                        decoration: BoxDecoration(
+                                          color: color.withOpacity(0.12),
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: Text(log.typeLabel,
+                                            style: TextStyle(color: color, fontSize: 9, fontWeight: FontWeight.w700)),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (!log.read)
+                              Container(
+                                width: 8, height: 8,
+                                margin: const EdgeInsets.only(top: 4),
+                                decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+                              ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -281,13 +386,21 @@ class _KpiCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.all(14),
-    decoration: BoxDecoration(color: AppColors.blueCard, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppColors.blueBorder)),
-    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(icon, style: const TextStyle(fontSize: 20)),
-      const SizedBox(height: 6),
-      Text(label.toUpperCase(), style: const TextStyle(color: AppColors.textMuted, fontSize: 9, fontWeight: FontWeight.w600, letterSpacing: 0.8)),
-      const SizedBox(height: 4),
-      Text(value, style: TextStyle(color: color, fontSize: 20, fontWeight: FontWeight.w900)),
-    ]),
+    decoration: BoxDecoration(
+      color: AppColors.blueCard,
+      borderRadius: BorderRadius.circular(10),
+      border: Border.all(color: AppColors.blueBorder),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(icon, style: const TextStyle(fontSize: 20)),
+        const SizedBox(height: 6),
+        Text(label.toUpperCase(),
+            style: const TextStyle(color: AppColors.textMuted, fontSize: 9, fontWeight: FontWeight.w600, letterSpacing: 0.8)),
+        const SizedBox(height: 4),
+        Text(value, style: TextStyle(color: color, fontSize: 20, fontWeight: FontWeight.w900)),
+      ],
+    ),
   );
 }

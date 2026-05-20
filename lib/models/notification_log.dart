@@ -37,3 +37,19 @@ class NotificationLog {
     }
   }
 }
+
+// Shared in-memory alert bus so sent alerts appear in resident inbox
+class AlertBus {
+  static final List<NotificationLog> _alerts = [];
+  static final List<void Function()> _listeners = [];
+
+  static List<NotificationLog> get alerts => List.unmodifiable(_alerts);
+
+  static void send(NotificationLog log) {
+    _alerts.insert(0, log);
+    for (final l in _listeners) l();
+  }
+
+  static void addListener(void Function() fn) => _listeners.add(fn);
+  static void removeListener(void Function() fn) => _listeners.remove(fn);
+}
