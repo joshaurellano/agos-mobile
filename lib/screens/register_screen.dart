@@ -21,7 +21,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   bool _showPass = false, _showConfirm = false;
   bool _loading = false, _success = false;
-  String _localError = '';
+  String? _localError;
   int _selectedRoleId = 0;
   List<Map<String, dynamic>> _roles = [];
 
@@ -47,7 +47,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Future<void> _handleSubmit() async {
     final auth = context.read<AuthService>();
     auth.clearError();
-    setState(() => _localError = '');
+    setState(() => _localError = null);
 
     if (_passCtrl.text != _confirmCtrl.text) {
       setState(() => _localError = 'Passwords do not match');
@@ -81,7 +81,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   @override
   Widget build(BuildContext context) {
     final auth  = context.watch<AuthService>();
-    final error = _localError.isNotEmpty ? _localError : auth.error;
+    final error = _localError ?? auth.error; // ✅ null-safe merge
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
@@ -190,7 +190,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     ),
                   ],
 
-                  if (error.isNotEmpty) ...[
+                  if (error != null) ...[  // ✅ null check instead of .isNotEmpty
                     const SizedBox(height: 14),
                     Container(
                       padding: const EdgeInsets.all(12),

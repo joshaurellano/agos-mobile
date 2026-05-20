@@ -19,7 +19,7 @@ void main() async {
 
   await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
 
-  AlertRealtimeService.start();
+  await AlertRealtimeService.start();
 
   runApp(
     ChangeNotifierProvider(

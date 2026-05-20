@@ -5,11 +5,11 @@ import 'supabase_service.dart';
 
 class AuthService extends ChangeNotifier {
   UserModel? _currentUser;
-  String _error = '';
-  bool _isLoading = true;
+  String?    _error;
+  bool       _isLoading = true;
 
   UserModel? get currentUser => _currentUser;
-  String     get error       => _error;
+  String?    get error       => _error;
   bool       get isLoading   => _isLoading;
 
   AuthService() {
@@ -41,7 +41,7 @@ class AuthService extends ChangeNotifier {
   }
 
   Future<bool> login(String username, String password) async {
-    _error = '';
+    _error = null;
     notifyListeners();
     final email = '$username@agos.local';
     try {
@@ -58,7 +58,7 @@ class AuthService extends ChangeNotifier {
   }
 
   Future<bool> createUser(Map<String, dynamic> payload) async {
-    _error = '';
+    _error = null;
     notifyListeners();
     try {
       final ok = await SupabaseService.createUser(payload);
@@ -77,11 +77,12 @@ class AuthService extends ChangeNotifier {
   Future<void> logout() async {
     await Supabase.instance.client.auth.signOut();
     _currentUser = null;
+    _error = null;
     notifyListeners();
   }
 
   void clearError() {
-    _error = '';
+    _error = null;
     notifyListeners();
   }
 }

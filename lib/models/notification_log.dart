@@ -38,15 +38,30 @@ class NotificationLog {
   }
 }
 
-// Shared in-memory alert bus so sent alerts appear in resident inbox
 class AlertBus {
   static final List<NotificationLog> _alerts = [];
   static final List<void Function()> _listeners = [];
 
   static List<NotificationLog> get alerts => List.unmodifiable(_alerts);
 
+  /// Adds a new alert and immediately notifies all listeners.
+  /// Used for realtime inserts.
   static void send(NotificationLog log) {
+    // Deduplicate by id in case realtime fires twice
+    if (_alerts.any((a) => a.id == log.id)) return;
     _alerts.insert(0, log);
+    notifyListeners();
+  }
+
+  /// Adds an alert silently (no listener notification).
+  /// Used during the initial bulk fetch so we only notify once at the end.
+  static void load(NotificationLog log) {
+    if (_alerts.any((a) => a.id == log.id)) return;
+    _alerts.add(log); // already ordered DESC from DB, so just append
+  }
+
+  /// Fires all registered listeners.
+  static void notifyListeners() {
     for (final l in _listeners) l();
   }
 
