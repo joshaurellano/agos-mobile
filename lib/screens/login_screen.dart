@@ -37,13 +37,13 @@ class _LoginScreenState extends State<LoginScreen> {
     final isWide    = screenW > 600;
 
     return Scaffold(
-      backgroundColor: AppColors.blueDeep,
+      backgroundColor: AppColors.bgDeep,
       body: Container(
         decoration: const BoxDecoration(
           gradient: RadialGradient(
             center: Alignment(-0.4, 0),
             radius: 1.2,
-            colors: [Color(0xFF0D2040), AppColors.blueDeep],
+            colors: [Color(0xFF0D2040), AppColors.bgDeep],
           ),
         ),
         child: SafeArea(
@@ -92,7 +92,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     const SizedBox(height: 4),
                     const Text(
                       'Flood Early Warning System',
-                      style: TextStyle(color: AppColors.textSecondary, fontSize: 14),
+                      style: TextStyle(color: AppColors.textSec, fontSize: 14),
                     ),
                     const SizedBox(height: 2),
                     const Text(
@@ -105,9 +105,9 @@ class _LoginScreenState extends State<LoginScreen> {
                     Container(
                       padding: const EdgeInsets.all(28),
                       decoration: BoxDecoration(
-                        color: AppColors.blueCard,
+                        color: AppColors.bgCard,
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: AppColors.blueBorder),
+                        border: Border.all(color: AppColors.bgBorder),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -115,7 +115,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           const Text(
                             'Sign In to Dashboard',
                             style: TextStyle(
-                              color: AppColors.textPrimary,
+                              color: AppColors.textPri,
                               fontSize: 16,
                               fontWeight: FontWeight.w700,
                             ),
@@ -123,7 +123,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           const SizedBox(height: 24),
 
                           // Username
-                          _FieldLabel('USERNAME'),
+                          const _FieldLabel('USERNAME'),
                           const SizedBox(height: 6),
                           _StyledInput(
                             controller: _usernameCtrl,
@@ -133,7 +133,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           const SizedBox(height: 16),
 
                           // Password
-                          _FieldLabel('PASSWORD'),
+                          const _FieldLabel('PASSWORD'),
                           const SizedBox(height: 6),
                           _StyledInput(
                             controller: _passwordCtrl,
@@ -183,7 +183,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               onPressed: _loading ? null : _handleLogin,
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: AppColors.accent,
-                                foregroundColor: AppColors.blueDark,
+                                foregroundColor: AppColors.bgDark,
                                 padding:
                                     const EdgeInsets.symmetric(vertical: 15),
                                 shape: RoundedRectangleBorder(
@@ -195,7 +195,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                       height: 20,
                                       child: CircularProgressIndicator(
                                           strokeWidth: 2,
-                                          color: AppColors.blueDark),
+                                          color: AppColors.bgDark),
                                     )
                                   : const Text(
                                       '🔐  Sign In',
@@ -236,7 +236,7 @@ class _FieldLabel extends StatelessWidget {
   Widget build(BuildContext context) => Text(
         text,
         style: const TextStyle(
-          color: AppColors.textSecondary,
+          color: AppColors.textSec,
           fontSize: 11,
           fontWeight: FontWeight.w600,
           letterSpacing: 0.8,
@@ -265,23 +265,23 @@ class _StyledInput extends StatelessWidget {
       controller: controller,
       obscureText: obscure,
       onSubmitted: onSubmitted,
-      style: const TextStyle(color: AppColors.textPrimary, fontSize: 15),
+      style: const TextStyle(color: AppColors.textPri, fontSize: 15),
       decoration: InputDecoration(
         hintText: hint,
         hintStyle:
             const TextStyle(color: AppColors.textMuted, fontSize: 14),
         suffixIcon: suffix,
         filled: true,
-        fillColor: AppColors.blueMid,
+        fillColor: AppColors.bgMid,
         contentPadding:
             const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
-          borderSide: const BorderSide(color: AppColors.blueBorder),
+          borderSide: const BorderSide(color: AppColors.bgBorder),
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
-          borderSide: const BorderSide(color: AppColors.blueBorder),
+          borderSide: const BorderSide(color: AppColors.bgBorder),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
