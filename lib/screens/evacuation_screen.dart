@@ -1,9 +1,11 @@
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
-// ─── Evacuation Centers (mirrors web FloodMapPage) ────────────────────────────
+// ─── Evacuation Centers ────────────────────────────────────────────────────────
 class _EvacCenter {
   final String id, name, type, note;
   final double lat, lng;
@@ -71,6 +73,26 @@ const _boundary = [
   LatLng(13.622423, 123.189744), LatLng(13.622633, 123.189794),
 ];
 
+// ─── Haversine distance (in meters) ──────────────────────────────────────────
+double _haversine(double lat1, double lng1, double lat2, double lng2) {
+  const r = 6371000.0; // Earth radius in meters
+  final dLat = _deg2rad(lat2 - lat1);
+  final dLng = _deg2rad(lng2 - lng1);
+  final a = math.sin(dLat / 2) * math.sin(dLat / 2) +
+      math.cos(_deg2rad(lat1)) *
+          math.cos(_deg2rad(lat2)) *
+          math.sin(dLng / 2) *
+          math.sin(dLng / 2);
+  return r * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+}
+
+double _deg2rad(double deg) => deg * (math.pi / 180);
+
+String _formatDistance(double meters) {
+  if (meters < 1000) return '${meters.round()} m';
+  return '${(meters / 1000).toStringAsFixed(2)} km';
+}
+
 // ─── Screen ───────────────────────────────────────────────────────────────────
 class EvacuationScreen extends StatefulWidget {
   const EvacuationScreen({super.key});
@@ -81,15 +103,95 @@ class EvacuationScreen extends StatefulWidget {
 class _EvacuationScreenState extends State<EvacuationScreen> {
   String? _openInfoId;
 
+  // Location state
+  LatLng? _userLocation;
+  bool _locating = false;
+  String? _locError;
+
+  // Nearest center (computed whenever location changes)
+  _EvacCenter? _nearest;
+  double? _nearestDist;
+
+  final MapController _mapController = MapController();
+
+  // ── Location fetching ──────────────────────────────────────────────────────
+  Future<void> _locateUser() async {
+    setState(() { _locating = true; _locError = null; });
+
+    try {
+      // 1. Check / request permission
+      LocationPermission perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.denied ||
+          perm == LocationPermission.deniedForever) {
+        setState(() {
+          _locError = 'Location permission denied. Please enable it in Settings.';
+          _locating = false;
+        });
+        return;
+      }
+
+      // 2. Check if location services are on
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        setState(() {
+          _locError = 'Location services are off. Please enable GPS.';
+          _locating = false;
+        });
+        return;
+      }
+
+      // 3. Get position
+      final pos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+
+      final userLatLng = LatLng(pos.latitude, pos.longitude);
+
+      // 4. Find nearest evacuation center
+      _EvacCenter? nearest;
+      double nearestDist = double.infinity;
+      for (final c in _centers) {
+        final d = _haversine(pos.latitude, pos.longitude, c.lat, c.lng);
+        if (d < nearestDist) {
+          nearestDist = d;
+          nearest = c;
+        }
+      }
+
+      setState(() {
+        _userLocation = userLatLng;
+        _nearest = nearest;
+        _nearestDist = nearestDist;
+        _locating = false;
+      });
+
+      // 5. Animate map to fit both user + nearest center
+      if (nearest != null) {
+        final midLat = (pos.latitude + nearest.lat) / 2;
+        final midLng = (pos.longitude + nearest.lng) / 2;
+        _mapController.move(LatLng(midLat, midLng), 14.8);
+      }
+    } catch (e) {
+      setState(() {
+        _locError = 'Could not get location: $e';
+        _locating = false;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
-        // ── Map ───────────────────────────────────────────────────────────
+        // ── Map ───────────────────────────────────────────────────────────────
         Expanded(
           flex: 11,
           child: Stack(children: [
             FlutterMap(
+              mapController: _mapController,
               options: const MapOptions(
                 initialCenter: _trianguloCenter,
                 initialZoom: 14.5,
@@ -99,11 +201,13 @@ class _EvacuationScreenState extends State<EvacuationScreen> {
               ),
               children: [
                 TileLayer(
-                  urlTemplate: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+                  urlTemplate:
+                      'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
                   subdomains: const ['a', 'b', 'c', 'd'],
                   userAgentPackageName: 'com.agos.app',
                 ),
-                // Barangay boundary — alert-color coded (mirroring web)
+
+                // Barangay boundary
                 PolygonLayer(polygons: [
                   Polygon(
                     points: _boundary,
@@ -112,51 +216,220 @@ class _EvacuationScreenState extends State<EvacuationScreen> {
                     borderStrokeWidth: 2,
                   ),
                 ]),
+
+                // ── Route line: user → nearest center ─────────────────────
+                if (_userLocation != null && _nearest != null)
+                  PolylineLayer(polylines: [
+                    Polyline(
+                      points: [
+                        _userLocation!,
+                        LatLng(_nearest!.lat, _nearest!.lng),
+                      ],
+                      color: const Color(0xFF22C55E),
+                      strokeWidth: 3.5,
+                      pattern: StrokePattern.dashed(segments: [12, 6]),
+                    ),
+                  ]),
+
                 // Evacuation markers
                 MarkerLayer(
-                  markers: _centers.map((c) => Marker(
-                    point: LatLng(c.lat, c.lng),
-                    width: 52, height: 52,
-                    child: GestureDetector(
-                      onTap: () => setState(() =>
-                        _openInfoId = _openInfoId == c.id ? null : c.id),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          // Name label above pin
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: c.color,
-                              borderRadius: BorderRadius.circular(4),
-                              boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 4)],
+                  markers: [
+                    // ── User location marker ─────────────────────────────
+                    if (_userLocation != null)
+                      Marker(
+                        point: _userLocation!,
+                        width: 60,
+                        height: 60,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF22C55E),
+                                borderRadius: BorderRadius.circular(4),
+                                boxShadow: [
+                                  BoxShadow(
+                                      color: Colors.black.withValues(alpha: 0.4),
+                                      blurRadius: 4),
+                                ],
+                              ),
+                              child: const Text('You',
+                                  style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 8,
+                                      fontWeight: FontWeight.w800)),
                             ),
-                            child: Text(
-                              c.name.split(' ').take(2).join(' '),
-                              style: const TextStyle(color: Colors.white, fontSize: 7, fontWeight: FontWeight.w700),
-                              maxLines: 1, overflow: TextOverflow.ellipsis,
+                            const SizedBox(height: 2),
+                            Container(
+                              width: 18,
+                              height: 18,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF22C55E),
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                    color: Colors.white, width: 2.5),
+                                boxShadow: [
+                                  BoxShadow(
+                                      color: const Color(0xFF22C55E)
+                                          .withValues(alpha: 0.5),
+                                      blurRadius: 8,
+                                      spreadRadius: 2),
+                                ],
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 2),
-                          // SVG-style pin
-                          CustomPaint(
-                            size: const Size(20, 26),
-                            painter: _PinPainter(color: c.color),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
-                    ),
-                  )).toList(),
+
+                    // ── Evacuation center markers ────────────────────────
+                    ..._centers.map((c) {
+                      final isNearest =
+                          _nearest != null && _nearest!.id == c.id;
+                      return Marker(
+                        point: LatLng(c.lat, c.lng),
+                        width: 60,
+                        height: 60,
+                        child: GestureDetector(
+                          onTap: () => setState(() =>
+                              _openInfoId =
+                                  _openInfoId == c.id ? null : c.id),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              // Name label — highlight nearest in green
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: isNearest
+                                      ? const Color(0xFF22C55E)
+                                      : c.color,
+                                  borderRadius: BorderRadius.circular(4),
+                                  boxShadow: [
+                                    BoxShadow(
+                                        color: Colors.black.withValues(alpha: 0.3),
+                                        blurRadius: 4),
+                                  ],
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (isNearest)
+                                      const Padding(
+                                        padding: EdgeInsets.only(right: 3),
+                                        child: Icon(Icons.navigation_rounded,
+                                            color: Colors.white, size: 8),
+                                      ),
+                                    Text(
+                                      c.name.split(' ').take(2).join(' '),
+                                      style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 7,
+                                          fontWeight: FontWeight.w700),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              CustomPaint(
+                                size: const Size(20, 26),
+                                painter: _PinPainter(
+                                    color: isNearest
+                                        ? const Color(0xFF22C55E)
+                                        : c.color),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }),
+                  ],
                 ),
               ],
             ),
 
-            // ── Info popup on marker tap ───────────────────────────────────
+            // ── Nearest center banner ──────────────────────────────────────
+            if (_nearest != null && _nearestDist != null)
+              Positioned(
+                top: 12,
+                left: 12,
+                right: 12,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF052e16).withValues(alpha: 0.95),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                        color: const Color(0xFF22C55E).withValues(alpha: 0.6)),
+                    boxShadow: [
+                      BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.4),
+                          blurRadius: 12),
+                    ],
+                  ),
+                  child: Row(children: [
+                    const Icon(Icons.navigation_rounded,
+                        color: Color(0xFF22C55E), size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('NEAREST EVACUATION CENTER',
+                                style: TextStyle(
+                                    color: Color(0xFF22C55E),
+                                    fontSize: 8,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 0.8)),
+                            const SizedBox(height: 2),
+                            Text(_nearest!.name,
+                                style: const TextStyle(
+                                    color: Color(0xFFe2eaf5),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700)),
+                          ]),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF22C55E).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                            color:
+                                const Color(0xFF22C55E).withValues(alpha: 0.4)),
+                      ),
+                      child: Text(
+                        _formatDistance(_nearestDist!),
+                        style: const TextStyle(
+                            color: Color(0xFF22C55E),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w800),
+                      ),
+                    ),
+                  ]),
+                ),
+              ),
+
+            // ── Info popup on marker tap ────────────────────────────────────
             if (_openInfoId != null)
               Positioned(
-                bottom: 12, left: 12, right: 12,
+                bottom: 12,
+                left: 12,
+                right: 12,
                 child: Builder(builder: (_) {
-                  final c = _centers.firstWhere((c) => c.id == _openInfoId);
+                  final c =
+                      _centers.firstWhere((c) => c.id == _openInfoId);
+                  final isNearest = _nearest?.id == c.id;
+                  final dist = _userLocation != null
+                      ? _haversine(_userLocation!.latitude,
+                          _userLocation!.longitude, c.lat, c.lng)
+                      : null;
                   return ClipRRect(
                     borderRadius: BorderRadius.circular(12),
                     child: Container(
@@ -164,153 +437,413 @@ class _EvacuationScreenState extends State<EvacuationScreen> {
                       decoration: BoxDecoration(
                         color: const Color(0xFF0d1f3c),
                         border: Border(
-                          left: BorderSide(color: c.color, width: 3),
-                          top: BorderSide(color: c.color.withValues(alpha: 0.4)),
-                          right: BorderSide(color: c.color.withValues(alpha: 0.4)),
-                          bottom: BorderSide(color: c.color.withValues(alpha: 0.4)),
+                          left: BorderSide(
+                              color: isNearest
+                                  ? const Color(0xFF22C55E)
+                                  : c.color,
+                              width: 3),
+                          top: BorderSide(
+                              color: (isNearest
+                                      ? const Color(0xFF22C55E)
+                                      : c.color)
+                                  .withValues(alpha: 0.4)),
+                          right: BorderSide(
+                              color: (isNearest
+                                      ? const Color(0xFF22C55E)
+                                      : c.color)
+                                  .withValues(alpha: 0.4)),
+                          bottom: BorderSide(
+                              color: (isNearest
+                                      ? const Color(0xFF22C55E)
+                                      : c.color)
+                                  .withValues(alpha: 0.4)),
                         ),
-                        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.5), blurRadius: 16)],
+                        boxShadow: [
+                          BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.5),
+                              blurRadius: 16),
+                        ],
                       ),
-                      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Container(
-                          width: 38, height: 38,
-                          decoration: BoxDecoration(
-                            color: c.color.withValues(alpha: 0.15),
-                            shape: BoxShape.circle,
-                            border: Border.all(color: c.color.withValues(alpha: 0.4)),
-                          ),
-                          child: const Icon(Icons.location_on_rounded, color: Color(0xFFDC143C), size: 20),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Text(c.name, style: const TextStyle(
-                            color: Color(0xFFe2eaf5), fontWeight: FontWeight.w700, fontSize: 13)),
-                          const SizedBox(height: 3),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: c.color.withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(4),
-                              border: Border.all(color: c.color.withValues(alpha: 0.35)),
+                      child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Container(
+                              width: 38,
+                              height: 38,
+                              decoration: BoxDecoration(
+                                color: (isNearest
+                                        ? const Color(0xFF22C55E)
+                                        : c.color)
+                                    .withValues(alpha: 0.15),
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                    color: (isNearest
+                                            ? const Color(0xFF22C55E)
+                                            : c.color)
+                                        .withValues(alpha: 0.4)),
+                              ),
+                              child: Icon(
+                                  isNearest
+                                      ? Icons.navigation_rounded
+                                      : Icons.location_on_rounded,
+                                  color: isNearest
+                                      ? const Color(0xFF22C55E)
+                                      : const Color(0xFFDC143C),
+                                  size: 20),
                             ),
-                            child: Text(c.type, style: TextStyle(
-                              color: c.color, fontSize: 9, fontWeight: FontWeight.w700)),
-                          ),
-                          const SizedBox(height: 5),
-                          Text(
-                            '📍 ${c.lat.toStringAsFixed(4)}, ${c.lng.toStringAsFixed(4)}',
-                            style: const TextStyle(color: Color(0xFF4a6080), fontSize: 10, fontFamily: 'monospace'),
-                          ),
-                        ])),
-                        GestureDetector(
-                          onTap: () => setState(() => _openInfoId = null),
-                          child: const Padding(
-                            padding: EdgeInsets.all(4),
-                            child: Icon(Icons.close, color: Color(0xFF4a6080), size: 16),
-                          ),
-                        ),
-                      ]),
+                            const SizedBox(width: 12),
+                            Expanded(
+                                child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                  if (isNearest)
+                                    Container(
+                                      margin:
+                                          const EdgeInsets.only(bottom: 4),
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF22C55E)
+                                            .withValues(alpha: 0.15),
+                                        borderRadius:
+                                            BorderRadius.circular(4),
+                                        border: Border.all(
+                                            color: const Color(0xFF22C55E)
+                                                .withValues(alpha: 0.4)),
+                                      ),
+                                      child: const Text(
+                                          '⚡ NEAREST TO YOU',
+                                          style: TextStyle(
+                                              color: Color(0xFF22C55E),
+                                              fontSize: 8,
+                                              fontWeight: FontWeight.w800,
+                                              letterSpacing: 0.8)),
+                                    ),
+                                  Text(c.name,
+                                      style: const TextStyle(
+                                          color: Color(0xFFe2eaf5),
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 13)),
+                                  const SizedBox(height: 3),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 7, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: c.color
+                                          .withValues(alpha: 0.15),
+                                      borderRadius:
+                                          BorderRadius.circular(4),
+                                      border: Border.all(
+                                          color: c.color
+                                              .withValues(alpha: 0.35)),
+                                    ),
+                                    child: Text(c.type,
+                                        style: TextStyle(
+                                            color: c.color,
+                                            fontSize: 9,
+                                            fontWeight: FontWeight.w700)),
+                                  ),
+                                  const SizedBox(height: 5),
+                                  Text(
+                                    '📍 ${c.lat.toStringAsFixed(4)}, ${c.lng.toStringAsFixed(4)}',
+                                    style: const TextStyle(
+                                        color: Color(0xFF4a6080),
+                                        fontSize: 10,
+                                        fontFamily: 'monospace'),
+                                  ),
+                                  if (dist != null) ...[
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      '📏 ${_formatDistance(dist)} away from you',
+                                      style: const TextStyle(
+                                          color: Color(0xFF22C55E),
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w600),
+                                    ),
+                                  ],
+                                ])),
+                            GestureDetector(
+                              onTap: () =>
+                                  setState(() => _openInfoId = null),
+                              child: const Padding(
+                                padding: EdgeInsets.all(4),
+                                child: Icon(Icons.close,
+                                    color: Color(0xFF4a6080), size: 16),
+                              ),
+                            ),
+                          ]),
                     ),
                   );
                 }),
               ),
 
-            // ── Map legend ─────────────────────────────────────────────────
-            Positioned(
-              top: 12, left: 12,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF0d1f3c).withValues(alpha: 0.92),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: const Color(0xFF1e3a5f)),
+            // ── Legend (shown only when no nearest banner) ─────────────────
+            if (_nearest == null)
+              Positioned(
+                top: 12,
+                left: 12,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0d1f3c).withValues(alpha: 0.92),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFF1e3a5f)),
+                  ),
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(children: [
+                          Container(
+                              width: 10,
+                              height: 10,
+                              decoration: const BoxDecoration(
+                                  color: Color(0xFFDC143C),
+                                  shape: BoxShape.circle)),
+                          const SizedBox(width: 6),
+                          const Text('Evacuation Centers',
+                              style: TextStyle(
+                                  color: Color(0xFF8da4be), fontSize: 9.5)),
+                        ]),
+                        const SizedBox(height: 5),
+                        Row(children: [
+                          Container(
+                              width: 18,
+                              height: 2,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF38bdf8)
+                                    .withValues(alpha: 0.7),
+                                borderRadius: BorderRadius.circular(1),
+                              )),
+                          const SizedBox(width: 6),
+                          const Text('Brgy. Boundary',
+                              style: TextStyle(
+                                  color: Color(0xFF8da4be), fontSize: 9.5)),
+                        ]),
+                      ]),
                 ),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Row(children: [
-                    Container(width: 10, height: 10,
-                      decoration: const BoxDecoration(color: Color(0xFFDC143C), shape: BoxShape.circle)),
-                    const SizedBox(width: 6),
-                    const Text('Evacuation Centers', style: TextStyle(color: Color(0xFF8da4be), fontSize: 9.5)),
-                  ]),
-                  const SizedBox(height: 5),
-                  Row(children: [
-                    Container(width: 18, height: 2,
+              ),
+
+            // ── Locate Me button ───────────────────────────────────────────
+            Positioned(
+              top: _nearest != null ? 72 : 12,
+              right: 12,
+              child: Column(
+                children: [
+                  GestureDetector(
+                    onTap: _locating ? null : _locateUser,
+                    child: Container(
+                      width: 42,
+                      height: 42,
                       decoration: BoxDecoration(
-                        color: const Color(0xFF38bdf8).withValues(alpha: 0.7),
-                        borderRadius: BorderRadius.circular(1),
-                      )),
-                    const SizedBox(width: 6),
-                    const Text('Brgy. Boundary', style: TextStyle(color: Color(0xFF8da4be), fontSize: 9.5)),
-                  ]),
-                ]),
+                        color: const Color(0xFF0d1f3c),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: _userLocation != null
+                              ? const Color(0xFF22C55E).withValues(alpha: 0.6)
+                              : const Color(0xFF1e3a5f),
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.3),
+                              blurRadius: 6),
+                        ],
+                      ),
+                      child: _locating
+                          ? const Center(
+                              child: SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                    color: Color(0xFF38bdf8),
+                                    strokeWidth: 2),
+                              ),
+                            )
+                          : Icon(
+                              _userLocation != null
+                                  ? Icons.my_location_rounded
+                                  : Icons.location_searching_rounded,
+                              color: _userLocation != null
+                                  ? const Color(0xFF22C55E)
+                                  : const Color(0xFF8da4be),
+                              size: 20,
+                            ),
+                    ),
+                  ),
+                  if (_userLocation != null) ...[
+                    const SizedBox(height: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 5, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0d1f3c),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: const Color(0xFF1e3a5f)),
+                      ),
+                      child: const Text('Live',
+                          style: TextStyle(
+                              color: Color(0xFF22C55E),
+                              fontSize: 7,
+                              fontWeight: FontWeight.w700)),
+                    ),
+                  ],
+                ],
               ),
             ),
 
-            // ── Click hint ─────────────────────────────────────────────────
-            Positioned(
-              top: 12, right: 12,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF0d1f3c).withValues(alpha: 0.85),
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(color: const Color(0xFF1e3a5f)),
+            // ── Error snackbar-style overlay ───────────────────────────────
+            if (_locError != null)
+              Positioned(
+                bottom: 12,
+                left: 12,
+                right: 12,
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF450a0a),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                        color: const Color(0xFFef4444).withValues(alpha: 0.5)),
+                  ),
+                  child: Row(children: [
+                    const Icon(Icons.error_outline_rounded,
+                        color: Color(0xFFef4444), size: 16),
+                    const SizedBox(width: 8),
+                    Expanded(
+                        child: Text(_locError!,
+                            style: const TextStyle(
+                                color: Color(0xFFfca5a5), fontSize: 11))),
+                    GestureDetector(
+                      onTap: () => setState(() => _locError = null),
+                      child: const Icon(Icons.close,
+                          color: Color(0xFF4a6080), size: 14),
+                    ),
+                  ]),
                 ),
-                child: const Text('Tap marker for details',
-                  style: TextStyle(color: Color(0xFF4a6080), fontSize: 9)),
               ),
-            ),
+
+            // ── Tap hint (no location yet) ─────────────────────────────────
+            if (_nearest == null && _locError == null)
+              Positioned(
+                bottom: 12,
+                left: 12,
+                right: 12,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0d1f3c).withValues(alpha: 0.9),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFF1e3a5f)),
+                  ),
+                  child: Row(children: [
+                    const Icon(Icons.info_outline_rounded,
+                        color: Color(0xFF38bdf8), size: 14),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'Tap the locate button to find the nearest evacuation center.',
+                        style: TextStyle(
+                            color: Color(0xFF8da4be), fontSize: 11),
+                      ),
+                    ),
+                    GestureDetector(
+                      onTap: _locating ? null : _locateUser,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF38bdf8).withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                              color: const Color(0xFF38bdf8)
+                                  .withValues(alpha: 0.4)),
+                        ),
+                        child: const Text('Locate Me',
+                            style: TextStyle(
+                                color: Color(0xFF38bdf8),
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700)),
+                      ),
+                    ),
+                  ]),
+                ),
+              ),
           ]),
         ),
 
-        // ── Detail cards ─────────────────────────────────────────────────────
+        // ── Detail cards ───────────────────────────────────────────────────────
         Expanded(
           flex: 13,
           child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(14, 14, 14, 24),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-
-              // Section header
-              const _SectionLabel(icon: '🏫', text: 'Evacuation Route Map — Barangay Triangulo'),
-              const SizedBox(height: 12),
-
-              // Center cards
-              ..._centers.map((c) => Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: _CenterCard(center: c),
-              )),
-
-              // Warning notice
-              const SizedBox(height: 4),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFf97316).withValues(alpha: 0.07),
-                    border: Border(
-                      left: const BorderSide(color: Color(0xFFf97316), width: 3),
-                      top: BorderSide(color: const Color(0xFFf97316).withValues(alpha: 0.25)),
-                      right: BorderSide(color: const Color(0xFFf97316).withValues(alpha: 0.25)),
-                      bottom: BorderSide(color: const Color(0xFFf97316).withValues(alpha: 0.25)),
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const _SectionLabel(
+                      icon: '🏫',
+                      text: 'Evacuation Route Map — Barangay Triangulo'),
+                  const SizedBox(height: 12),
+                  ..._centers.map((c) {
+                    final isNearest = _nearest?.id == c.id;
+                    final dist = _userLocation != null
+                        ? _haversine(_userLocation!.latitude,
+                            _userLocation!.longitude, c.lat, c.lng)
+                        : null;
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: _CenterCard(
+                          center: c,
+                          isNearest: isNearest,
+                          distanceMeters: dist),
+                    );
+                  }),
+                  const SizedBox(height: 4),
+                  // Warning notice
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFf97316).withValues(alpha: 0.07),
+                        border: Border(
+                          left: const BorderSide(
+                              color: Color(0xFFf97316), width: 3),
+                          top: BorderSide(
+                              color: const Color(0xFFf97316)
+                                  .withValues(alpha: 0.25)),
+                          right: BorderSide(
+                              color: const Color(0xFFf97316)
+                                  .withValues(alpha: 0.25)),
+                          bottom: BorderSide(
+                              color: const Color(0xFFf97316)
+                                  .withValues(alpha: 0.25)),
+                        ),
+                      ),
+                      child: const Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('⚠️  DURING A FLOOD EVENT',
+                                style: TextStyle(
+                                    color: Color(0xFFf97316),
+                                    fontSize: 9.5,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 1.0)),
+                            SizedBox(height: 6),
+                            Text(
+                              'Proceed immediately to the nearest designated evacuation center. '
+                              'Bring essential documents, medicines, and supplies. '
+                              'Follow instructions from Barangay Officials.',
+                              style: TextStyle(
+                                  color: Color(0xFF8da4be),
+                                  fontSize: 11.5,
+                                  height: 1.5),
+                            ),
+                          ]),
                     ),
                   ),
-                  child: const Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text('⚠️  DURING A FLOOD EVENT', style: TextStyle(
-                      color: Color(0xFFf97316), fontSize: 9.5,
-                      fontWeight: FontWeight.w800, letterSpacing: 1.0,
-                    )),
-                    SizedBox(height: 6),
-                    Text(
-                      'Proceed immediately to the nearest designated evacuation center. '
-                      'Bring essential documents, medicines, and supplies. '
-                      'Follow instructions from Barangay Officials.',
-                      style: TextStyle(color: Color(0xFF8da4be), fontSize: 11.5, height: 1.5),
-                    ),
-                  ]),
-                ),
-              ),
-            ]),
+                ]),
           ),
         ),
       ],
@@ -318,106 +851,197 @@ class _EvacuationScreenState extends State<EvacuationScreen> {
   }
 }
 
-// ── Center Detail Card ────────────────────────────────────────────────────────
+// ── Center Detail Card ─────────────────────────────────────────────────────────
 class _CenterCard extends StatelessWidget {
   final _EvacCenter center;
-  const _CenterCard({required this.center});
+  final bool isNearest;
+  final double? distanceMeters;
+  const _CenterCard(
+      {required this.center,
+      this.isNearest = false,
+      this.distanceMeters});
 
   @override
   Widget build(BuildContext context) => ClipRRect(
-    borderRadius: BorderRadius.circular(10),
-    child: Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0d1f3c),
-        border: Border(
-          left: BorderSide(color: center.color, width: 3),
-          top: const BorderSide(color: Color(0xFF1e3a5f)),
-          right: const BorderSide(color: Color(0xFF1e3a5f)),
-          bottom: const BorderSide(color: Color(0xFF1e3a5f)),
-        ),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Expanded(
-            child: Text('🏫 ${center.name}', style: const TextStyle(
-              color: Color(0xFFe2eaf5), fontWeight: FontWeight.w700, fontSize: 13.5)),
-          ),
-        ]),
-        const SizedBox(height: 7),
-        Row(children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-            decoration: BoxDecoration(
-              color: center.color.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(4),
-              border: Border.all(color: center.color.withValues(alpha: 0.35)),
-            ),
-            child: Text(center.type, style: TextStyle(
-              color: center.color, fontSize: 9.5, fontWeight: FontWeight.w700)),
-          ),
-        ]),
-        const SizedBox(height: 10),
-        Text(center.note, style: const TextStyle(
-          color: Color(0xFF8da4be), fontSize: 12, height: 1.5)),
-        const SizedBox(height: 10),
-        // Coordinates row
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: const Color(0xFF0a1828),
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: const Color(0xFF1e3a5f)),
-          ),
-          child: Row(children: [
-            const Icon(Icons.location_on_outlined, color: Color(0xFF4a6080), size: 14),
-            const SizedBox(width: 6),
-            Text(
-              '${center.lat.toStringAsFixed(4)}, ${center.lng.toStringAsFixed(4)}',
-              style: const TextStyle(
-                color: Color(0xFF4a6080), fontSize: 11, fontFamily: 'monospace'),
+            color: const Color(0xFF0d1f3c),
+            border: Border(
+              left: BorderSide(
+                  color: isNearest
+                      ? const Color(0xFF22C55E)
+                      : center.color,
+                  width: 3),
+              top: BorderSide(
+                  color: isNearest
+                      ? const Color(0xFF22C55E).withValues(alpha: 0.3)
+                      : const Color(0xFF1e3a5f)),
+              right: BorderSide(
+                  color: isNearest
+                      ? const Color(0xFF22C55E).withValues(alpha: 0.3)
+                      : const Color(0xFF1e3a5f)),
+              bottom: BorderSide(
+                  color: isNearest
+                      ? const Color(0xFF22C55E).withValues(alpha: 0.3)
+                      : const Color(0xFF1e3a5f)),
             ),
-          ]),
+          ),
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Expanded(
+                    child: Text('🏫 ${center.name}',
+                        style: const TextStyle(
+                            color: Color(0xFFe2eaf5),
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13.5)),
+                  ),
+                  if (isNearest)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 7, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF22C55E).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(5),
+                        border: Border.all(
+                            color: const Color(0xFF22C55E)
+                                .withValues(alpha: 0.4)),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.navigation_rounded,
+                              color: Color(0xFF22C55E), size: 10),
+                          SizedBox(width: 3),
+                          Text('NEAREST',
+                              style: TextStyle(
+                                  color: Color(0xFF22C55E),
+                                  fontSize: 8,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 0.5)),
+                        ],
+                      ),
+                    ),
+                ]),
+                const SizedBox(height: 7),
+                Row(children: [
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: center.color.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(
+                          color: center.color.withValues(alpha: 0.35)),
+                    ),
+                    child: Text(center.type,
+                        style: TextStyle(
+                            color: center.color,
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w700)),
+                  ),
+                ]),
+                const SizedBox(height: 10),
+                Text(center.note,
+                    style: const TextStyle(
+                        color: Color(0xFF8da4be), fontSize: 12, height: 1.5)),
+                const SizedBox(height: 10),
+                // Coordinates + distance row
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0a1828),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: const Color(0xFF1e3a5f)),
+                  ),
+                  child: Row(children: [
+                    const Icon(Icons.location_on_outlined,
+                        color: Color(0xFF4a6080), size: 14),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        '${center.lat.toStringAsFixed(4)}, ${center.lng.toStringAsFixed(4)}',
+                        style: const TextStyle(
+                            color: Color(0xFF4a6080),
+                            fontSize: 11,
+                            fontFamily: 'monospace'),
+                      ),
+                    ),
+                    if (distanceMeters != null) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: isNearest
+                              ? const Color(0xFF22C55E).withValues(alpha: 0.1)
+                              : const Color(0xFF1e3a5f),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(
+                              color: isNearest
+                                  ? const Color(0xFF22C55E)
+                                      .withValues(alpha: 0.4)
+                                  : const Color(0xFF2a4a6f)),
+                        ),
+                        child: Text(
+                          _formatDistance(distanceMeters!),
+                          style: TextStyle(
+                              color: isNearest
+                                  ? const Color(0xFF22C55E)
+                                  : const Color(0xFF8da4be),
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ],
+                  ]),
+                ),
+              ]),
         ),
-      ]),
-    ),
-  );
+      );
 }
 
-// ── Section Label ─────────────────────────────────────────────────────────────
+// ── Section Label ──────────────────────────────────────────────────────────────
 class _SectionLabel extends StatelessWidget {
   final String icon, text;
   const _SectionLabel({required this.icon, required this.text});
 
   @override
   Widget build(BuildContext context) => Row(children: [
-    Text(icon, style: const TextStyle(fontSize: 12)),
-    const SizedBox(width: 6),
-    Flexible(
-      child: Text(text.toUpperCase(), style: const TextStyle(
-        color: Color(0xFF4a6080), fontSize: 9.5,
-        fontWeight: FontWeight.w800, letterSpacing: 1.2,
-      )),
-    ),
-    const SizedBox(width: 8),
-    Expanded(child: Container(height: 1, color: const Color(0xFF1e3a5f))),
-  ]);
+        Text(icon, style: const TextStyle(fontSize: 12)),
+        const SizedBox(width: 6),
+        Flexible(
+          child: Text(text.toUpperCase(),
+              style: const TextStyle(
+                  color: Color(0xFF4a6080),
+                  fontSize: 9.5,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.2)),
+        ),
+        const SizedBox(width: 8),
+        Expanded(child: Container(height: 1, color: const Color(0xFF1e3a5f))),
+      ]);
 }
 
-// ── Custom Pin Painter ────────────────────────────────────────────────────────
+// ── Custom Pin Painter ─────────────────────────────────────────────────────────
 class _PinPainter extends CustomPainter {
   final Color color;
   const _PinPainter({required this.color});
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = color..style = PaintingStyle.fill;
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
     final strokePaint = Paint()
       ..color = Colors.white.withValues(alpha: 0.8)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5;
 
-    // Teardrop path — use ui.Path to avoid flutter_map's Path<LatLng> conflict
     final path = ui.Path()
       ..moveTo(size.width / 2, size.height)
       ..cubicTo(
@@ -440,11 +1064,12 @@ class _PinPainter extends CustomPainter {
     canvas.drawPath(path, paint);
     canvas.drawPath(path, strokePaint);
 
-    // Inner circle
     canvas.drawCircle(
       Offset(size.width / 2, size.height * 0.38),
       size.width * 0.22,
-      Paint()..color = Colors.white..style = PaintingStyle.fill,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.fill,
     );
   }
 
