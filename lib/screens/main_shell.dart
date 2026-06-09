@@ -8,15 +8,23 @@ import 'alert_screen.dart';
 import 'evacuation_screen.dart';
 
 class MainShell extends StatefulWidget {
-  const MainShell({super.key});
+  // initialTabIndex lets a notification tap open directly on Alerts (index 1)
+  final int initialTabIndex;
+  const MainShell({super.key, this.initialTabIndex = 0});
 
   @override
   State<MainShell> createState() => _MainShellState();
 }
 
 class _MainShellState extends State<MainShell> {
-  int _index = 0;
+  late int _currentIndex;
   AlertLevelType _alertLevel = AlertLevelType.normal;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.initialTabIndex;
+  }
 
   void _onAlertChanged(AlertLevelType level) {
     if (_alertLevel != level) setState(() => _alertLevel = level);
@@ -144,7 +152,7 @@ class _MainShellState extends State<MainShell> {
                 ],
               ),
               const Spacer(),
-              // Alert badge
+              // Alert level badge
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                 decoration: BoxDecoration(
@@ -192,7 +200,7 @@ class _MainShellState extends State<MainShell> {
           child: Container(height: 1, color: AppColors.bgBorder),
         ),
       ),
-      body: IndexedStack(index: _index, children: screens),
+      body: IndexedStack(index: _currentIndex, children: screens),
       bottomNavigationBar: SafeArea(
         child: Container(
           decoration: const BoxDecoration(
@@ -200,8 +208,8 @@ class _MainShellState extends State<MainShell> {
             border: Border(top: BorderSide(color: AppColors.bgBorder)),
           ),
           child: BottomNavigationBar(
-            currentIndex: _index,
-            onTap: (i) => setState(() => _index = i),
+            currentIndex: _currentIndex,
+            onTap: (i) => setState(() => _currentIndex = i),
             backgroundColor: AppColors.bgCard,
             selectedItemColor: AppColors.accent,
             unselectedItemColor: AppColors.textMuted,
