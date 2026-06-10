@@ -2,8 +2,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart' hide Path;
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:webview_flutter/webview_flutter.dart';
@@ -100,24 +100,22 @@ class _Prediction {
   });
 
   factory _Prediction.fromJson(Map<String, dynamic> j) {
-  final m = j['live_metrics'] as Map<String, dynamic>? ?? {};
-
-  num? parseNum(dynamic v) {
-    if (v == null) return null;
-    if (v is num) return v;
-    return num.tryParse(v.toString());
+    final m = j['live_metrics'] as Map<String, dynamic>? ?? {};
+    num? parseNum(dynamic v) {
+      if (v == null) return null;
+      if (v is num) return v;
+      return num.tryParse(v.toString());
+    }
+    return _Prediction(
+      probability: (parseNum(j['probability']))?.toDouble() ?? 0.0,
+      alertLevel:  (parseNum(j['alert_level']))?.toInt()   ?? 0,
+      status:       j['status']?.toString()                ?? '',
+      rainfallMm:  (parseNum(m['rainfall_mm']))?.toDouble() ?? 0.0,
+      windSignal:  (parseNum(m['wind_signal']))?.toInt()   ?? 0,
+      humidity:    (parseNum(m['humidity']))?.toInt()      ?? 0,
+      leadTime:     j['lead_time_estimate']?.toString()    ?? '6–12 hrs',
+    );
   }
-
-  return _Prediction(
-    probability: (parseNum(j['probability']))?.toDouble() ?? 0.0,
-    alertLevel:  (parseNum(j['alert_level']))?.toInt()   ?? 0,
-    status:       j['status']?.toString()                ?? '',
-    rainfallMm:  (parseNum(m['rainfall_mm']))?.toDouble() ?? 0.0,
-    windSignal:  (parseNum(m['wind_signal']))?.toInt()   ?? 0,
-    humidity:    (parseNum(m['humidity']))?.toInt()      ?? 0,
-    leadTime:     j['lead_time_estimate']?.toString()    ?? '6–12 hrs',
-  );
-}
 
   double? get estimatedLevel {
     if (rainfallMm <= 0) return null;
@@ -130,10 +128,48 @@ class _Prediction {
 // ─── Snapshot for chart ───────────────────────────────────────────────────────
 class _Snapshot {
   final String label;
-  final double floodRisk; // 0–100
+  final double floodRisk;
   final bool isToday;
   final int readings;
   const _Snapshot({required this.label, required this.floodRisk, this.isToday = false, this.readings = 0});
+}
+
+// ─── AlertLevelType extension ─────────────────────────────────────────────────
+extension AlertLevelTypeX on AlertLevelType {
+  AlertLevel get info => AlertLevel.levels[this]!;
+  Color get color => info.color;
+  String get label => info.label;
+
+  IconData get icon {
+    switch (this) {
+      case AlertLevelType.normal:   return Icons.check_circle_outline_rounded;
+      case AlertLevelType.advisory: return Icons.info_outline_rounded;
+      case AlertLevelType.warning:  return Icons.warning_amber_rounded;
+      case AlertLevelType.critical: return Icons.crisis_alert_rounded;
+    }
+  }
+
+  bool get shouldPulse =>
+      this == AlertLevelType.critical || this == AlertLevelType.warning;
+}
+
+// ─── FloodMarker model ────────────────────────────────────────────────────────
+class FloodMarker {
+  final String id;
+  final LatLng location;
+  final String label;
+  final AlertLevelType level;
+  final double waterLevel;
+  final String updatedAt;
+
+  const FloodMarker({
+    required this.id,
+    required this.location,
+    required this.label,
+    required this.level,
+    required this.waterLevel,
+    required this.updatedAt,
+  });
 }
 
 // ─── Main Widget ──────────────────────────────────────────────────────────────
@@ -154,7 +190,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   DateTime _lastUpdated = DateTime.now();
   Timer? _timer;
 
-  // Radar WebView
   late final WebViewController _windyCtrl;
 
   @override
@@ -185,7 +220,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         widget.onAlertChanged?.call(_alertFromInt(p.alertLevel));
       } else { throw Exception(); }
     } catch (e) {
-      print('LSTM ERROR: $e');
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) setState(() { _loading = false; _error = true; });
       });
@@ -293,25 +327,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (_error) ...[_OfflineBanner(), const SizedBox(height: 12)],
 
-            // ── Offline Banner ────────────────────────────────────────────
-            if (_error) ...[
-              _OfflineBanner(),
-              const SizedBox(height: 12),
-            ],
-
-            // ── Alert Status Header ───────────────────────────────────────
             _AlertHeader(
-              alertInfo:   alertInfo,
-              alertColor:  _alertColor,
-              pred:        _pred,
-              pct:         pct,
-              lastUpdated: _lastUpdated,
-              formatTime:  _formatTime,
+              alertInfo: alertInfo, alertColor: _alertColor, pred: _pred,
+              pct: pct, lastUpdated: _lastUpdated, formatTime: _formatTime,
             ),
             const SizedBox(height: 16),
 
-            // ── KPI Metrics Row ───────────────────────────────────────────
             const _SectionLabel(icon: '📊', text: 'Live Metrics'),
             const SizedBox(height: 8),
             GridView.count(
@@ -337,8 +360,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   sub: _pred != null ? 'OpenMeteo · Live feed' : 'PAGASA Station',
                   color: const Color(0xFF38bdf8),
                   badge: _pred != null
-                    ? (_pred!.rainfallMm > 10 ? '🔴 Heavy' : _pred!.rainfallMm > 2 ? '🟡 Moderate' : '🟢 Light')
-                    : null,
+                      ? (_pred!.rainfallMm > 10 ? '🔴 Heavy' : _pred!.rainfallMm > 2 ? '🟡 Moderate' : '🟢 Light')
+                      : null,
                 ),
                 _MetricCard(
                   icon: '🌀', label: 'PAGASA Wind Signal',
@@ -356,11 +379,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
             const SizedBox(height: 18),
 
-            // ── Flood Status Map ──────────────────────────────────────────
             _FloodMapCard(currentAlertKey: _currentAlertKey, alertColor: _alertColor),
             const SizedBox(height: 18),
 
-            // ── Water Level Gauge + Alert Level Reference ─────────────────
             const _SectionLabel(icon: '💧', text: 'Water Level Gauge'),
             const SizedBox(height: 8),
             _WaterLevelGaugeCard(
@@ -374,38 +395,33 @@ class _DashboardScreenState extends State<DashboardScreen> {
             _AlertLevelTable(currentAlertKey: _currentAlertKey),
             const SizedBox(height: 18),
 
-            // ── System Status ─────────────────────────────────────────────
             _SystemStatusPanel(
-              modelOnline:     !_error && !_loading && _pred != null,
-              modelLoading:    _loading,
-              modelError:      _error ? 'Model backend offline' : null,
-              forecastOnline:  !_forecastLoading && _forecast.isNotEmpty,
+              modelOnline: !_error && !_loading && _pred != null,
+              modelLoading: _loading,
+              modelError: _error ? 'Model backend offline' : null,
+              forecastOnline: !_forecastLoading && _forecast.isNotEmpty,
               forecastLoading: _forecastLoading,
-              forecastCount:   _forecast.length,
-              formatTime:      _formatTime,
+              forecastCount: _forecast.length,
+              formatTime: _formatTime,
             ),
             const SizedBox(height: 18),
 
-            // ── LSTM Prediction Input Summary ─────────────────────────────
             if (_pred != null) ...[
               _PredictionInputTable(pred: _pred!),
               const SizedBox(height: 18),
             ],
 
-            // ── LSTM Flood Probability Trend Chart ────────────────────────
             _FloodForecastChart(),
             const SizedBox(height: 18),
 
-            // ── 72-Hour Rainfall Forecast ─────────────────────────────────
             const _SectionLabel(icon: '⛅', text: '72-Hour Rainfall Forecast'),
             const SizedBox(height: 4),
             const Text('OpenMeteo · Naga City',
-              style: TextStyle(color: Color(0xFF4a6080), fontSize: 10)),
+                style: TextStyle(color: Color(0xFF4a6080), fontSize: 10)),
             const SizedBox(height: 10),
             _ForecastStrip(forecast: _forecast, loading: _forecastLoading),
             const SizedBox(height: 18),
 
-            // ── Live Weather Radar ────────────────────────────────────────
             const _SectionLabel(icon: '🛰', text: 'Live Weather Radar'),
             const SizedBox(height: 8),
             _RadarCard(windyCtrl: _windyCtrl),
@@ -438,7 +454,6 @@ class _SectionLabel extends StatelessWidget {
   ]);
 }
 
-// ── Offline Banner ──────────────────────────────────────────────────────────
 class _OfflineBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) => ClipRRect(
@@ -468,7 +483,6 @@ class _OfflineBanner extends StatelessWidget {
   );
 }
 
-// ── Alert Status Header ─────────────────────────────────────────────────────
 class _AlertHeader extends StatelessWidget {
   final dynamic alertInfo;
   final Color alertColor;
@@ -482,7 +496,7 @@ class _AlertHeader extends StatelessWidget {
     required this.pct, required this.lastUpdated, required this.formatTime,
   });
 
- @override
+  @override
   Widget build(BuildContext context) => Container(
     decoration: BoxDecoration(
       gradient: LinearGradient(
@@ -492,76 +506,69 @@ class _AlertHeader extends StatelessWidget {
       border: Border.all(color: alertColor.withValues(alpha: 0.4)),
       borderRadius: BorderRadius.circular(10),
     ),
-    child: IntrinsicHeight(  // ← fixes the infinite height problem
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Left accent strip
-          Container(width: 4, decoration: BoxDecoration(
-            color: alertColor,
-            borderRadius: const BorderRadius.only(
-              topLeft: Radius.circular(9),
-              bottomLeft: Radius.circular(9),
-            ),
-          )),
-          // Content
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
-                  _PulsingDot(color: alertColor),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      '${alertInfo.label.toString().toUpperCase()} STATUS',
-                      style: TextStyle(color: alertColor, fontWeight: FontWeight.w900, fontSize: 15, letterSpacing: 0.5),
-                    ),
+    child: IntrinsicHeight(
+      child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Container(width: 4, decoration: BoxDecoration(
+          color: alertColor,
+          borderRadius: const BorderRadius.only(
+            topLeft: Radius.circular(9), bottomLeft: Radius.circular(9)),
+        )),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                _PulsingDot(color: alertColor),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '${alertInfo.label.toString().toUpperCase()} STATUS',
+                    style: TextStyle(color: alertColor, fontWeight: FontWeight.w900,
+                        fontSize: 15, letterSpacing: 0.5),
                   ),
-                ]),
-                const SizedBox(height: 6),
-                Text(alertInfo.description as String? ?? '',
-                  style: const TextStyle(color: Color(0xFFe2eaf5), fontSize: 13, fontWeight: FontWeight.w500)),
-                const SizedBox(height: 4),
-                Text('🔔 ${alertInfo.action as String? ?? ''}',
-                  style: const TextStyle(color: Color(0xFF8da4be), fontSize: 12)),
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    const Text('MODEL OUTPUT', style: TextStyle(
-                      color: Color(0xFF4a6080), fontSize: 9,
-                      fontWeight: FontWeight.w700, letterSpacing: 1.2,
-                    )),
-                    const SizedBox(height: 4),
-                    Text(
-                      pred != null ? pred!.status : '⚠️ Flooding possible in next 6 hrs',
-                      style: const TextStyle(color: Color(0xFFe2eaf5), fontSize: 12.5, fontWeight: FontWeight.w600),
-                    ),
-                    if (pred != null) ...[
-                      const SizedBox(height: 6),
-                      Text('⏱ Lead time: ${pred!.leadTime}',
-                        style: const TextStyle(color: Color(0xFF8da4be), fontSize: 11)),
-                    ],
-                    const SizedBox(height: 4),
-                    Text('Updated: ${formatTime(lastUpdated)}',
-                      style: const TextStyle(color: Color(0xFF4a6080), fontSize: 10)),
-                  ]),
                 ),
               ]),
-            ),
+              const SizedBox(height: 6),
+              Text(alertInfo.description as String? ?? '',
+                  style: const TextStyle(color: Color(0xFFe2eaf5), fontSize: 13, fontWeight: FontWeight.w500)),
+              const SizedBox(height: 4),
+              Text('🔔 ${alertInfo.action as String? ?? ''}',
+                  style: const TextStyle(color: Color(0xFF8da4be), fontSize: 12)),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('MODEL OUTPUT', style: TextStyle(
+                    color: Color(0xFF4a6080), fontSize: 9,
+                    fontWeight: FontWeight.w700, letterSpacing: 1.2,
+                  )),
+                  const SizedBox(height: 4),
+                  Text(
+                    pred != null ? pred!.status : '⚠️ Flooding possible in next 6 hrs',
+                    style: const TextStyle(color: Color(0xFFe2eaf5), fontSize: 12.5, fontWeight: FontWeight.w600),
+                  ),
+                  if (pred != null) ...[
+                    const SizedBox(height: 6),
+                    Text('⏱ Lead time: ${pred!.leadTime}',
+                        style: const TextStyle(color: Color(0xFF8da4be), fontSize: 11)),
+                  ],
+                  const SizedBox(height: 4),
+                  Text('Updated: ${formatTime(lastUpdated)}',
+                      style: const TextStyle(color: Color(0xFF4a6080), fontSize: 10)),
+                ]),
+              ),
+            ]),
           ),
-        ],
-      ),
+        ),
+      ]),
     ),
   );
 }
 
-// ── Metric Card ─────────────────────────────────────────────────────────────
 class _MetricCard extends StatelessWidget {
   final String icon, label, value, sub;
   final String? unit, badge;
@@ -579,91 +586,64 @@ class _MetricCard extends StatelessWidget {
     opacity: dim ? 0.55 : 1.0,
     child: ClipRRect(
       borderRadius: BorderRadius.circular(10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(height: 3, color: color),
-          Expanded(
-            child: Container(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-              decoration: BoxDecoration(
-                color: const Color(0xFF0d1f3c),
-                border: Border.all(color: const Color(0xFF1e3a5f)),
-              ),
-              child: Stack(children: [
-                Positioned(right: 0, top: -2,
-                  child: Text(icon, style: TextStyle(fontSize: 28, color: Colors.white.withValues(alpha: 0.05)))),
-                Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-                  Text(label.toUpperCase(), style: const TextStyle(
-                    color: Color(0xFF4a6080), fontSize: 8,
-                    fontWeight: FontWeight.w700, letterSpacing: 1.0,
-                  )),
-                  const SizedBox(height: 6),
-                  Row(crossAxisAlignment: CrossAxisAlignment.baseline, textBaseline: TextBaseline.alphabetic, children: [
-                    Flexible(child: FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft,
-                      child: Text(value, style: TextStyle(color: color, fontSize: 22, fontWeight: FontWeight.w900)))),
-                    if (unit != null) ...[
-                      const SizedBox(width: 3),
-                      Text(unit!, style: const TextStyle(color: Color(0xFF4a6080), fontSize: 10, fontWeight: FontWeight.w600)),
-                    ],
-                  ]),
-                  if (badge != null) ...[
-                    const SizedBox(height: 4),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: color.withValues(alpha: 0.12),
-                        border: Border.all(color: color.withValues(alpha: 0.35)),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(badge!, style: TextStyle(color: color, fontSize: 8.5, fontWeight: FontWeight.w700)),
-                    ),
-                  ],
-                  const SizedBox(height: 5),
-                  Text(sub, style: const TextStyle(color: Color(0xFF8da4be), fontSize: 9), maxLines: 2, overflow: TextOverflow.ellipsis),
-                ]),
-              ]),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
+        Container(height: 3, color: color),
+        Expanded(
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0d1f3c),
+              border: Border.all(color: const Color(0xFF1e3a5f)),
             ),
+            child: Stack(children: [
+              Positioned(right: 0, top: -2,
+                  child: Text(icon, style: TextStyle(fontSize: 28, color: Colors.white.withValues(alpha: 0.05)))),
+              Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                Text(label.toUpperCase(), style: const TextStyle(
+                  color: Color(0xFF4a6080), fontSize: 8, fontWeight: FontWeight.w700, letterSpacing: 1.0)),
+                const SizedBox(height: 6),
+                Row(crossAxisAlignment: CrossAxisAlignment.baseline, textBaseline: TextBaseline.alphabetic, children: [
+                  Flexible(child: FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft,
+                      child: Text(value, style: TextStyle(color: color, fontSize: 22, fontWeight: FontWeight.w900)))),
+                  if (unit != null) ...[
+                    const SizedBox(width: 3),
+                    Text(unit!, style: const TextStyle(color: Color(0xFF4a6080), fontSize: 10, fontWeight: FontWeight.w600)),
+                  ],
+                ]),
+                if (badge != null) ...[
+                  const SizedBox(height: 4),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: 0.12),
+                      border: Border.all(color: color.withValues(alpha: 0.35)),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(badge!, style: TextStyle(color: color, fontSize: 8.5, fontWeight: FontWeight.w700)),
+                  ),
+                ],
+                const SizedBox(height: 5),
+                Text(sub, style: const TextStyle(color: Color(0xFF8da4be), fontSize: 9),
+                    maxLines: 2, overflow: TextOverflow.ellipsis),
+              ]),
+            ]),
           ),
-        ],
-      ),
+        ),
+      ]),
     ),
   );
 }
 
-// ── Flood Status Map ─────────────────────────────────────────────────────────
-class _FloodMapCard extends StatefulWidget {
+// ── Flood Status Map ──────────────────────────────────────────────────────────
+class _FloodMapCard extends StatelessWidget {
   final String currentAlertKey;
   final Color alertColor;
   const _FloodMapCard({required this.currentAlertKey, required this.alertColor});
 
   @override
-  State<_FloodMapCard> createState() => _FloodMapCardState();
-}
-
-class _FloodMapCardState extends State<_FloodMapCard> {
-  GoogleMapController? _mapController;
-
-  @override
-  void didUpdateWidget(_FloodMapCard oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // Repaint polygon if alert changed
-    if (oldWidget.currentAlertKey != widget.currentAlertKey) setState(() {});
-  }
-
-  @override
-  void dispose() {
-    _mapController?.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
     const alertLevelKeys = ['NORMAL', 'ADVISORY', 'WARNING', 'CRITICAL'];
-    final color = _alertColors[widget.currentAlertKey] ?? _alertColors['NORMAL']!;
-    final fillHex   = _colorToGoogleHex(color);
-    final strokeHex = _colorToGoogleHex(color);
+    final color = _alertColors[currentAlertKey] ?? _alertColors['NORMAL']!;
 
     return Container(
       decoration: BoxDecoration(
@@ -672,7 +652,6 @@ class _FloodMapCardState extends State<_FloodMapCard> {
         border: Border.all(color: const Color(0xFF1e3a5f)),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Header
         Padding(
           padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -688,23 +667,23 @@ class _FloodMapCardState extends State<_FloodMapCard> {
             ]),
             const SizedBox(height: 4),
             const Text('Boundary overlay · Alert level color-coded',
-              style: TextStyle(color: Color(0xFF4a6080), fontSize: 10)),
+                style: TextStyle(color: Color(0xFF4a6080), fontSize: 10)),
             const SizedBox(height: 8),
-            // Alert level legend
             Row(children: alertLevelKeys.map((key) {
               final c = _alertColors[key]!;
-              final isCur = key == widget.currentAlertKey;
+              final isCur = key == currentAlertKey;
               return Padding(
                 padding: const EdgeInsets.only(right: 10),
                 child: Row(children: [
                   Container(width: 8, height: 8,
-                    decoration: BoxDecoration(
-                      color: c.withValues(alpha: isCur ? 1.0 : 0.3),
-                      borderRadius: BorderRadius.circular(2),
-                    )),
+                      decoration: BoxDecoration(
+                        color: c.withValues(alpha: isCur ? 1.0 : 0.3),
+                        borderRadius: BorderRadius.circular(2),
+                      )),
                   const SizedBox(width: 4),
                   Text(key, style: TextStyle(
-                    fontSize: 8.5, letterSpacing: 0.5, fontWeight: isCur ? FontWeight.w700 : FontWeight.w400,
+                    fontSize: 8.5, letterSpacing: 0.5,
+                    fontWeight: isCur ? FontWeight.w700 : FontWeight.w400,
                     color: isCur ? c : const Color(0xFF4a6080),
                   )),
                 ]),
@@ -712,52 +691,58 @@ class _FloodMapCardState extends State<_FloodMapCard> {
             }).toList()),
           ]),
         ),
-        // Map
         ClipRRect(
           borderRadius: const BorderRadius.only(
-            bottomLeft: Radius.circular(9), bottomRight: Radius.circular(9)),
+              bottomLeft: Radius.circular(9), bottomRight: Radius.circular(9)),
           child: SizedBox(
             height: 280,
-            child: GoogleMap(
-              initialCameraPosition: const CameraPosition(
-                target: LatLng(13.6140, 123.1915),
-                zoom: 14.5,
-              ),
-              mapType: MapType.normal,
-              polygons: {
-                Polygon(
-                  polygonId: const PolygonId('triangulo'),
-                  points: _trianguloPolygon,
-                  strokeColor: color,
-                  strokeWidth: 2,
-                  fillColor: color.withValues(alpha: 0.28),
+            child: FlutterMap(
+              options: MapOptions(
+                initialCenter: const LatLng(13.6140, 123.1915),
+                initialZoom: 14.5,
+                interactionOptions: const InteractionOptions(
+                  flags: InteractiveFlag.pinchZoom | InteractiveFlag.drag,
                 ),
-              },
-              onMapCreated: (ctrl) => _mapController = ctrl,
-              zoomControlsEnabled: false,
-              myLocationButtonEnabled: false,
-              compassEnabled: false,
-              mapToolbarEnabled: false,
+              ),
+              children: [
+                TileLayer(
+                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  userAgentPackageName: 'com.agos.floodmonitoring',
+                  tileBuilder: (context, tileWidget, tile) => ColorFiltered(
+                    colorFilter: const ColorFilter.matrix([
+                      -0.2126, -0.7152, -0.0722, 0, 255,
+                      -0.2126, -0.7152, -0.0722, 0, 255,
+                      -0.2126, -0.7152, -0.0722, 0, 255,
+                       0,       0,       0,       1,   0,
+                    ]),
+                    child: tileWidget,
+                  ),
+                ),
+                PolygonLayer(polygons: [
+                  Polygon(
+                    points: _trianguloPolygon,
+                    color: color.withValues(alpha: 0.28),
+                    borderColor: color,
+                    borderStrokeWidth: 2.0,
+                  ),
+                ]),
+              ],
             ),
           ),
         ),
-        // Footer
         Padding(
           padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
-          child: Text(
+          child: const Text(
             'Approximate barangay boundary · Source: PAGASA & OCD Region V',
-            style: const TextStyle(color: Color(0xFF4a6080), fontSize: 9.5),
+            style: TextStyle(color: Color(0xFF4a6080), fontSize: 9.5),
           ),
         ),
       ]),
     );
   }
-
-  // Google Maps color is ARGB hex string
-  static Color _colorToGoogleHex(Color c) => c; // just pass Color directly as-is
 }
 
-// ── Water Level Gauge Card ───────────────────────────────────────────────────
+// ── Water Level Gauge Card ────────────────────────────────────────────────────
 class _WaterLevelGaugeCard extends StatelessWidget {
   final double? level;
   final Color color;
@@ -774,34 +759,29 @@ class _WaterLevelGaugeCard extends StatelessWidget {
       (value: 4.5, color: const Color(0xFFef4444), label: 'Critical'),
     ];
 
-   return Container(
-    padding: const EdgeInsets.all(16),
-    decoration: BoxDecoration(
-      color: const Color(0xFF0d1f3c),
-      borderRadius: BorderRadius.circular(10),
-      border: Border.all(color: const Color(0xFF1e3a5f)),
-    ),
-    child: IntrinsicHeight(                          // ← fix
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Scale labels + bar — fixed sizes so no unconstrained height
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0d1f3c),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFF1e3a5f)),
+      ),
+      child: IntrinsicHeight(
+        child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           SizedBox(
-            width: 28,
-            height: 180,
+            width: 28, height: 180,
             child: Column(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [6, 5, 4, 3, 2, 1, 0].map((v) =>
                 Text('${v}m', style: const TextStyle(
-                  color: Color(0xFF4a6080), fontSize: 8.5, fontWeight: FontWeight.w600)),
+                    color: Color(0xFF4a6080), fontSize: 8.5, fontWeight: FontWeight.w600)),
               ).toList(),
             ),
           ),
           const SizedBox(width: 6),
           Container(
-            width: 36,
-            height: 180,
+            width: 36, height: 180,
             decoration: BoxDecoration(
               color: const Color(0xFF152a4a),
               borderRadius: BorderRadius.circular(6),
@@ -821,9 +801,7 @@ class _WaterLevelGaugeCard extends StatelessWidget {
                   decoration: BoxDecoration(
                     color: color.withValues(alpha: 0.85),
                     borderRadius: const BorderRadius.only(
-                      bottomLeft: Radius.circular(5),
-                      bottomRight: Radius.circular(5),
-                    ),
+                      bottomLeft: Radius.circular(5), bottomRight: Radius.circular(5)),
                   ),
                 ),
               ),
@@ -843,10 +821,10 @@ class _WaterLevelGaugeCard extends StatelessWidget {
               ),
               const SizedBox(height: 6),
               Text(
-                level == null   ? 'No model data available'
-                : level! >= 4.5 ? 'Critical — immediate action required'
-                : level! >= 3.5 ? 'Warning — monitor closely'
-                : level! >= 2.5 ? 'Advisory — elevated risk'
+                level == null    ? 'No model data available'
+                : level! >= 4.5  ? 'Critical — immediate action required'
+                : level! >= 3.5  ? 'Warning — monitor closely'
+                : level! >= 2.5  ? 'Advisory — elevated risk'
                 : 'Within normal range',
                 style: const TextStyle(color: Color(0xFF8da4be), fontSize: 10.5, height: 1.4),
               ),
@@ -855,25 +833,24 @@ class _WaterLevelGaugeCard extends StatelessWidget {
                 padding: const EdgeInsets.only(bottom: 5),
                 child: Row(children: [
                   Container(width: 16, height: 2, decoration: BoxDecoration(
-                    color: t.color, borderRadius: BorderRadius.circular(1))),
+                      color: t.color, borderRadius: BorderRadius.circular(1))),
                   const SizedBox(width: 6),
                   Text('${t.label} (${t.value}m)',
-                    style: const TextStyle(color: Color(0xFF4a6080), fontSize: 9.5)),
+                      style: const TextStyle(color: Color(0xFF4a6080), fontSize: 9.5)),
                 ]),
               )),
               const SizedBox(height: 8),
               const Text('Baseline 1.4m + rain ×0.045',
-                style: TextStyle(color: Color(0xFF2a4060), fontSize: 8.5)),
+                  style: TextStyle(color: Color(0xFF2a4060), fontSize: 8.5)),
             ]),
           ),
-        ],
+        ]),
       ),
-    ),
-  );
+    );
   }
 }
 
-// ── Alert Level Reference Table ─────────────────────────────────────────────
+// ── Alert Level Reference Table ───────────────────────────────────────────────
 class _AlertLevelTable extends StatelessWidget {
   final String currentAlertKey;
   const _AlertLevelTable({required this.currentAlertKey});
@@ -908,22 +885,19 @@ class _AlertLevelTable extends StatelessWidget {
               decoration: BoxDecoration(
                 color: isCur ? color.withValues(alpha: 0.08) : Colors.transparent,
                 border: Border(
-                  bottom: isLast ? BorderSide.none : const BorderSide(color: Color(0xFF1e3a5f)),
-                ),
+                  bottom: isLast ? BorderSide.none : const BorderSide(color: Color(0xFF1e3a5f))),
               ),
               child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Container(
-                  width: 8, height: 8, margin: const EdgeInsets.only(top: 3),
-                  decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(2)),
-                ),
+                Container(width: 8, height: 8, margin: const EdgeInsets.only(top: 3),
+                    decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(2))),
                 const SizedBox(width: 10),
                 SizedBox(
                   width: 76,
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(_thresholds[item.key]!.label.toUpperCase(), style: TextStyle(
-                      color: color, fontSize: 10.5, fontWeight: FontWeight.w800, letterSpacing: 0.4)),
+                        color: color, fontSize: 10.5, fontWeight: FontWeight.w800, letterSpacing: 0.4)),
                     Text(item.range, style: const TextStyle(
-                      color: Color(0xFF4a6080), fontSize: 9, fontFamily: 'monospace')),
+                        color: Color(0xFF4a6080), fontSize: 9, fontFamily: 'monospace')),
                   ]),
                 ),
                 const SizedBox(width: 8),
@@ -942,7 +916,7 @@ class _AlertLevelTable extends StatelessWidget {
                         borderRadius: BorderRadius.circular(3),
                       ),
                       child: Text('CURRENT', style: TextStyle(
-                        color: color, fontSize: 8, fontWeight: FontWeight.w700)),
+                          color: color, fontSize: 8, fontWeight: FontWeight.w700)),
                     ),
                   ],
                 ])),
@@ -955,7 +929,7 @@ class _AlertLevelTable extends StatelessWidget {
   }
 }
 
-// ── System Status Panel ──────────────────────────────────────────────────────
+// ── System Status Panel ───────────────────────────────────────────────────────
 class _SystemStatusPanel extends StatelessWidget {
   final bool modelOnline, modelLoading, forecastOnline, forecastLoading;
   final String? modelError;
@@ -972,26 +946,18 @@ class _SystemStatusPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final now = DateTime.now();
     final indicators = [
-      (
-        label: 'LSTM Prediction Engine',
-        status: modelLoading ? 'checking' : modelOnline ? 'online' : 'offline',
-        detail: modelOnline ? 'Last response: ${formatTime(now)}' : modelError ?? 'Connecting...',
-      ),
-      (
-        label: 'WeatherAPI Forecast Feed',
-        status: forecastLoading ? 'checking' : forecastOnline ? 'online' : 'offline',
-        detail: forecastOnline ? '$forecastCount hourly records loaded' : 'Feed unavailable',
-      ),
-      (
-        label: 'Supabase Database',
-        status: 'online',
-        detail: 'Alert logs · User auth · SMS queue',
-      ),
-      (
-        label: 'SMS Gateway (httpsms)',
-        status: 'online',
-        detail: 'Edge function standby',
-      ),
+      (label: 'LSTM Prediction Engine',
+       status: modelLoading ? 'checking' : modelOnline ? 'online' : 'offline',
+       detail: modelOnline ? 'Last response: ${formatTime(now)}' : modelError ?? 'Connecting...'),
+      (label: 'WeatherAPI Forecast Feed',
+       status: forecastLoading ? 'checking' : forecastOnline ? 'online' : 'offline',
+       detail: forecastOnline ? '$forecastCount hourly records loaded' : 'Feed unavailable'),
+      (label: 'Supabase Database',
+       status: 'online',
+       detail: 'Alert logs · User auth · SMS queue'),
+      (label: 'SMS Gateway (httpsms)',
+       status: 'online',
+       detail: 'Edge function standby'),
     ];
 
     final statusColors = {
@@ -1032,20 +998,22 @@ class _SystemStatusPanel extends StatelessWidget {
                   width: 7, height: 7, margin: const EdgeInsets.only(top: 3),
                   decoration: BoxDecoration(
                     shape: BoxShape.circle, color: c,
-                    boxShadow: ind.status == 'online' ? [BoxShadow(color: c.withValues(alpha: 0.5), blurRadius: 4)] : null,
+                    boxShadow: ind.status == 'online'
+                        ? [BoxShadow(color: c.withValues(alpha: 0.5), blurRadius: 4)]
+                        : null,
                   ),
                 ),
                 const SizedBox(width: 7),
                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text(ind.label, style: const TextStyle(
-                    color: Color(0xFFe2eaf5), fontSize: 9.5, fontWeight: FontWeight.w600),
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                      color: Color(0xFFe2eaf5), fontSize: 9.5, fontWeight: FontWeight.w600),
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
                   const SizedBox(height: 1),
                   Text(statusLabels[ind.status]!, style: TextStyle(
-                    color: c, fontSize: 8, fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+                      color: c, fontSize: 8, fontWeight: FontWeight.w800, letterSpacing: 0.5)),
                   const SizedBox(height: 2),
                   Text(ind.detail, style: const TextStyle(color: Color(0xFF4a6080), fontSize: 8.5),
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
                 ])),
               ]),
             );
@@ -1056,7 +1024,7 @@ class _SystemStatusPanel extends StatelessWidget {
   }
 }
 
-// ── LSTM Prediction Input Table ──────────────────────────────────────────────
+// ── LSTM Prediction Input Table ───────────────────────────────────────────────
 class _PredictionInputTable extends StatelessWidget {
   final _Prediction pred;
   const _PredictionInputTable({required this.pred});
@@ -1064,12 +1032,12 @@ class _PredictionInputTable extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final rows = [
-      (icon: '🌧', label: 'Rainfall',          value: '${pred.rainfallMm.toStringAsFixed(2)} mm/hr', note: 'Primary flood driver'),
-      (icon: '💨', label: 'Humidity',           value: '${pred.humidity}%',                          note: 'Atmospheric moisture'),
-      (icon: '🌀', label: 'Wind Signal',        value: 'PAGASA #${pred.windSignal}',                 note: 'PAGASA classification'),
-      (icon: '🤖', label: 'Flood Probability',  value: pred.probabilityPct,                          note: 'LSTM output confidence'),
-      (icon: '🚦', label: 'Alert Level',        value: 'Level ${pred.alertLevel}',                   note: 'Model classification'),
-      (icon: '⏱', label: 'Lead Time Est.',     value: pred.leadTime,                                note: 'Time before peak flood'),
+      (icon: '🌧', label: 'Rainfall',         value: '${pred.rainfallMm.toStringAsFixed(2)} mm/hr', note: 'Primary flood driver'),
+      (icon: '💨', label: 'Humidity',          value: '${pred.humidity}%',                          note: 'Atmospheric moisture'),
+      (icon: '🌀', label: 'Wind Signal',       value: 'PAGASA #${pred.windSignal}',                 note: 'PAGASA classification'),
+      (icon: '🤖', label: 'Flood Probability', value: pred.probabilityPct,                          note: 'LSTM output confidence'),
+      (icon: '🚦', label: 'Alert Level',       value: 'Level ${pred.alertLevel}',                   note: 'Model classification'),
+      (icon: '⏱', label: 'Lead Time Est.',    value: pred.leadTime,                                note: 'Time before peak flood'),
     ];
 
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -1085,9 +1053,9 @@ class _PredictionInputTable extends StatelessWidget {
           ),
           child: Column(
             children: rows.asMap().entries.map((e) {
-              final idx  = e.key;
-              final row  = e.value;
-              final even = idx % 2 == 0;
+              final idx    = e.key;
+              final row    = e.value;
+              final even   = idx % 2 == 0;
               final isLast = idx == rows.length - 1;
               return Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
@@ -1099,11 +1067,13 @@ class _PredictionInputTable extends StatelessWidget {
                   Text(row.icon, style: const TextStyle(fontSize: 15)),
                   const SizedBox(width: 10),
                   Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(row.label, style: const TextStyle(color: Color(0xFFe2eaf5), fontSize: 11, fontWeight: FontWeight.w600)),
+                    Text(row.label, style: const TextStyle(
+                        color: Color(0xFFe2eaf5), fontSize: 11, fontWeight: FontWeight.w600)),
                     Text(row.note, style: const TextStyle(color: Color(0xFF4a6080), fontSize: 9.5)),
                   ])),
                   Text(row.value, style: const TextStyle(
-                    color: Color(0xFF38bdf8), fontSize: 11.5, fontWeight: FontWeight.w700, fontFamily: 'monospace')),
+                      color: Color(0xFF38bdf8), fontSize: 11.5,
+                      fontWeight: FontWeight.w700, fontFamily: 'monospace')),
                 ]),
               );
             }).toList(),
@@ -1113,14 +1083,14 @@ class _PredictionInputTable extends StatelessWidget {
       const SizedBox(height: 6),
       Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: const [
         Text('Model: LSTM · Cloud Run (asia-southeast1)',
-          style: TextStyle(color: Color(0xFF4a6080), fontSize: 9)),
+            style: TextStyle(color: Color(0xFF4a6080), fontSize: 9)),
         Text('Poll: 30s', style: TextStyle(color: Color(0xFF4a6080), fontSize: 9)),
       ]),
     ]);
   }
 }
 
-// ── LSTM Flood Probability Trend Chart ──────────────────────────────────────
+// ── LSTM Flood Probability Trend Chart ───────────────────────────────────────
 class _FloodForecastChart extends StatefulWidget {
   const _FloodForecastChart();
   @override
@@ -1128,7 +1098,7 @@ class _FloodForecastChart extends StatefulWidget {
 }
 
 class _FloodForecastChartState extends State<_FloodForecastChart> {
-  String _view = 'hourly'; // 'hourly' | 'daily'
+  String _view = 'hourly';
   List<_Snapshot> _data = [];
   bool _loading = true;
   DateTime? _lastFetched;
@@ -1142,13 +1112,12 @@ class _FloodForecastChartState extends State<_FloodForecastChart> {
     super.initState();
     _fetchData();
     _timer = Timer.periodic(const Duration(seconds: 30), (_) => _fetchData());
-    // Realtime subscription
     _sub = _supabase
-      .from('flood_snapshots')
-      .stream(primaryKey: ['id'])
-      .order('created_at', ascending: false)
-      .limit(1)
-      .listen((_) => _fetchData());
+        .from('flood_snapshots')
+        .stream(primaryKey: ['id'])
+        .order('created_at', ascending: false)
+        .limit(1)
+        .listen((_) => _fetchData());
   }
 
   @override
@@ -1163,10 +1132,10 @@ class _FloodForecastChartState extends State<_FloodForecastChart> {
       if (_view == 'hourly') {
         final since = DateTime.now().subtract(const Duration(hours: 24));
         final res = await _supabase
-          .from('flood_snapshots')
-          .select('created_at, probability')
-          .gte('created_at', since.toIso8601String())
-          .order('created_at', ascending: true);
+            .from('flood_snapshots')
+            .select('created_at, probability')
+            .gte('created_at', since.toIso8601String())
+            .order('created_at', ascending: true);
 
         final rows = (res as List).cast<Map<String, dynamic>>();
         if (!mounted) return;
@@ -1187,10 +1156,10 @@ class _FloodForecastChartState extends State<_FloodForecastChart> {
       } else {
         final since = DateTime.now().subtract(const Duration(days: 7));
         final res = await _supabase
-          .from('flood_snapshots')
-          .select('created_at, probability')
-          .gte('created_at', since.toIso8601String())
-          .order('created_at', ascending: true);
+            .from('flood_snapshots')
+            .select('created_at, probability')
+            .gte('created_at', since.toIso8601String())
+            .order('created_at', ascending: true);
 
         final rows = (res as List).cast<Map<String, dynamic>>();
         final byDay = <String, ({DateTime date, List<double> probs})>{};
@@ -1231,6 +1200,13 @@ class _FloodForecastChartState extends State<_FloodForecastChart> {
     return const Color(0xFF22c55e);
   }
 
+  String _formatTime(DateTime dt) {
+    final h = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+    final m = dt.minute.toString().padLeft(2, '0');
+    final ampm = dt.hour < 12 ? 'AM' : 'PM';
+    return '$h:$m $ampm';
+  }
+
   @override
   Widget build(BuildContext context) {
     final latest = _data.isNotEmpty ? _data.last.floodRisk : null;
@@ -1243,8 +1219,6 @@ class _FloodForecastChartState extends State<_FloodForecastChart> {
         border: Border.all(color: const Color(0xFF1e3a5f)),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-
-        // Header row
         Row(children: [
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const _SectionLabel(icon: '🤖', text: 'LSTM Flood Probability Trend'),
@@ -1256,7 +1230,6 @@ class _FloodForecastChartState extends State<_FloodForecastChart> {
             ),
           ])),
           const SizedBox(width: 10),
-          // Toggle
           Container(
             decoration: BoxDecoration(
               color: const Color(0xFF0a1828),
@@ -1271,7 +1244,6 @@ class _FloodForecastChartState extends State<_FloodForecastChart> {
         ]),
         const SizedBox(height: 12),
 
-        // Latest callout
         if (latest != null) ...[
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -1282,11 +1254,11 @@ class _FloodForecastChartState extends State<_FloodForecastChart> {
             ),
             child: Row(children: [
               Text('${latest.toStringAsFixed(0)}%', style: TextStyle(
-                color: _riskColor(latest), fontSize: 28, fontWeight: FontWeight.w900, height: 1)),
+                  color: _riskColor(latest), fontSize: 28, fontWeight: FontWeight.w900, height: 1)),
               const SizedBox(width: 12),
               Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 const Text('Current Flood Probability', style: TextStyle(
-                  color: Color(0xFFe2eaf5), fontSize: 11, fontWeight: FontWeight.w700)),
+                    color: Color(0xFFe2eaf5), fontSize: 11, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 2),
                 Text(
                   latest >= 75 ? '⛔ Immediate action may be required'
@@ -1301,24 +1273,22 @@ class _FloodForecastChartState extends State<_FloodForecastChart> {
           const SizedBox(height: 12),
         ],
 
-        // Chart body
         if (_loading)
           Container(
             height: 200, alignment: Alignment.center,
             child: const Text('Loading predictions from Supabase...',
-              style: TextStyle(color: Color(0xFF4a6080), fontSize: 12)),
+                style: TextStyle(color: Color(0xFF4a6080), fontSize: 12)),
           )
         else if (_data.isEmpty)
           Container(
-            height: 200,
-            alignment: Alignment.center,
+            height: 200, alignment: Alignment.center,
             decoration: BoxDecoration(
               color: const Color(0xFF0a1828),
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: const Color(0xFF1e3a5f)),
             ),
             child: const Text('⚠️ No LSTM snapshots yet',
-              style: TextStyle(color: Color(0xFF4a6080), fontSize: 12)),
+                style: TextStyle(color: Color(0xFF4a6080), fontSize: 12)),
           )
         else
           _buildChart(),
@@ -1331,9 +1301,9 @@ class _FloodForecastChartState extends State<_FloodForecastChart> {
         const SizedBox(height: 8),
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: const [
           Flexible(child: Text('Source: flood_snapshots · Poll: 30s · Realtime active',
-            style: TextStyle(color: Color(0xFF4a6080), fontSize: 8.5))),
+              style: TextStyle(color: Color(0xFF4a6080), fontSize: 8.5))),
           Text('Situational awareness only',
-            style: TextStyle(color: Color(0xFF4a6080), fontSize: 8.5)),
+              style: TextStyle(color: Color(0xFF4a6080), fontSize: 8.5)),
         ]),
       ]),
     );
@@ -1354,53 +1324,46 @@ class _FloodForecastChartState extends State<_FloodForecastChart> {
     ),
   );
 
-  Widget _buildChart() {
-    // Simple custom painter chart (no fl_chart dependency needed)
-    return SizedBox(
-      height: 200,
-      child: CustomPaint(
-        painter: _ChartPainter(data: _data, riskColor: _riskColor),
-        size: const Size(double.infinity, 200),
-      ),
-    );
-  }
+  Widget _buildChart() => SizedBox(
+    height: 200,
+    child: CustomPaint(
+      painter: _ChartPainter(data: _data, riskColor: _riskColor),
+      size: const Size(double.infinity, 200),
+    ),
+  );
 
-  Widget _buildDailyStrip() {
-    return Row(
-      children: _data.map((d) {
-        final color = _riskColor(d.floodRisk);
-        return Expanded(child: Container(
-          margin: const EdgeInsets.symmetric(horizontal: 2),
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 2),
-          decoration: BoxDecoration(
-            color: d.isToday ? const Color(0xFF38bdf8).withValues(alpha: 0.08) : const Color(0xFF0a1828),
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: d.isToday ? const Color(0xFF38bdf8).withValues(alpha: 0.3) : const Color(0xFF1e3a5f)),
-          ),
-          child: Column(children: [
-            Text(d.label, style: TextStyle(
-              color: d.isToday ? const Color(0xFF38bdf8) : const Color(0xFF4a6080),
-              fontSize: 7.5, fontWeight: FontWeight.w700), textAlign: TextAlign.center),
-            const SizedBox(height: 4),
-            Text('${d.floodRisk.toStringAsFixed(0)}%', style: TextStyle(
-              color: color, fontSize: 11, fontWeight: FontWeight.w900)),
-            if (d.readings > 0)
-              Text('${d.readings}r', style: const TextStyle(color: Color(0xFF38bdf8), fontSize: 7)),
-          ]),
-        ));
-      }).toList(),
-    );
-  }
-
-  String _formatTime(DateTime dt) {
-    final h = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
-    final m = dt.minute.toString().padLeft(2, '0');
-    final ampm = dt.hour < 12 ? 'AM' : 'PM';
-    return '$h:$m $ampm';
-  }
+  Widget _buildDailyStrip() => Row(
+    children: _data.map((d) {
+      final color = _riskColor(d.floodRisk);
+      return Expanded(child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 2),
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 2),
+        decoration: BoxDecoration(
+          color: d.isToday
+              ? const Color(0xFF38bdf8).withValues(alpha: 0.08)
+              : const Color(0xFF0a1828),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+              color: d.isToday
+                  ? const Color(0xFF38bdf8).withValues(alpha: 0.3)
+                  : const Color(0xFF1e3a5f)),
+        ),
+        child: Column(children: [
+          Text(d.label, style: TextStyle(
+            color: d.isToday ? const Color(0xFF38bdf8) : const Color(0xFF4a6080),
+            fontSize: 7.5, fontWeight: FontWeight.w700), textAlign: TextAlign.center),
+          const SizedBox(height: 4),
+          Text('${d.floodRisk.toStringAsFixed(0)}%',
+              style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w900)),
+          if (d.readings > 0)
+            Text('${d.readings}r', style: const TextStyle(color: Color(0xFF38bdf8), fontSize: 7)),
+        ]),
+      ));
+    }).toList(),
+  );
 }
 
-// ── Chart Painter (no external dep) ─────────────────────────────────────────
+// ── Chart Painter ─────────────────────────────────────────────────────────────
 class _ChartPainter extends CustomPainter {
   final List<_Snapshot> data;
   final Color Function(double) riskColor;
@@ -1409,37 +1372,29 @@ class _ChartPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     if (data.isEmpty) return;
-
     final w = size.width;
     final h = size.height;
-    final chartH = h - 28; // leave bottom for labels
+    final chartH = h - 28;
 
-    // Reference lines: 25, 50, 75
     for (final pct in [25.0, 50.0, 75.0]) {
       final y = chartH - (pct / 100) * chartH;
-      final paint = Paint()
-        ..color = riskColor(pct).withValues(alpha: 0.3)
-        ..strokeWidth = 1;
       final dashPaint = Paint()
         ..color = riskColor(pct).withValues(alpha: 0.4)
         ..strokeWidth = 0.8
         ..style = PaintingStyle.stroke;
-      // dashed line
       double x = 0;
       while (x < w) {
         canvas.drawLine(Offset(x, y), Offset((x + 4).clamp(0, w), y), dashPaint);
         x += 7;
       }
-      // label
       final tp = TextPainter(
         text: TextSpan(text: '${pct.toStringAsFixed(0)}%',
-          style: TextStyle(color: riskColor(pct).withValues(alpha: 0.7), fontSize: 8)),
+            style: TextStyle(color: riskColor(pct).withValues(alpha: 0.7), fontSize: 8)),
         textDirection: TextDirection.ltr,
       )..layout();
       tp.paint(canvas, Offset(2, y - 10));
     }
 
-    // Build path
     final path = Path();
     final fillPath = Path();
     for (int i = 0; i < data.length; i++) {
@@ -1454,17 +1409,18 @@ class _ChartPainter extends CustomPainter {
         fillPath.lineTo(x, y);
       }
     }
-
-    // Fill gradient
     fillPath.lineTo(w, chartH);
     fillPath.close();
+
     final gradient = LinearGradient(
       begin: Alignment.topCenter, end: Alignment.bottomCenter,
-      colors: [const Color(0xFFa855f7).withValues(alpha: 0.22), const Color(0xFFa855f7).withValues(alpha: 0.02)],
+      colors: [
+        const Color(0xFFa855f7).withValues(alpha: 0.22),
+        const Color(0xFFa855f7).withValues(alpha: 0.02),
+      ],
     );
-    canvas.drawPath(fillPath, Paint()..shader = gradient.createShader(Rect.fromLTWH(0, 0, w, chartH)));
-
-    // Stroke
+    canvas.drawPath(fillPath,
+        Paint()..shader = gradient.createShader(Rect.fromLTWH(0, 0, w, chartH)));
     canvas.drawPath(path, Paint()
       ..color = const Color(0xFFa855f7)
       ..strokeWidth = 2.5
@@ -1472,26 +1428,22 @@ class _ChartPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round);
 
-    // Dots
     for (int i = 0; i < data.length; i++) {
-      if (data.length > 48 && i % 4 != 0) continue; // skip if dense
+      if (data.length > 48 && i % 4 != 0) continue;
       final x = (i / (data.length - 1).clamp(1, double.infinity)) * w;
       final y = chartH - (data[i].floodRisk / 100) * chartH;
       final c = riskColor(data[i].floodRisk);
       canvas.drawCircle(Offset(x, y), 3.5, Paint()..color = c);
-      canvas.drawCircle(Offset(x, y), 3.5, Paint()
-        ..color = c
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5);
+      canvas.drawCircle(Offset(x, y), 3.5,
+          Paint()..color = c..style = PaintingStyle.stroke..strokeWidth = 1.5);
     }
 
-    // X axis labels (show ~6 evenly)
     final step = (data.length / 6).ceil().clamp(1, data.length);
     for (int i = 0; i < data.length; i += step) {
       final x = (i / (data.length - 1).clamp(1, double.infinity)) * w;
       final tp = TextPainter(
         text: TextSpan(text: data[i].label,
-          style: const TextStyle(color: Color(0xFF4a6080), fontSize: 8)),
+            style: const TextStyle(color: Color(0xFF4a6080), fontSize: 8)),
         textDirection: TextDirection.ltr,
       )..layout();
       tp.paint(canvas, Offset((x - tp.width / 2).clamp(0, w - tp.width), chartH + 6));
@@ -1502,7 +1454,7 @@ class _ChartPainter extends CustomPainter {
   bool shouldRepaint(_ChartPainter old) => old.data != data;
 }
 
-// ── Forecast Strip ───────────────────────────────────────────────────────────
+// ── Forecast Strip ────────────────────────────────────────────────────────────
 class _ForecastStrip extends StatelessWidget {
   final List<Map<String, dynamic>> forecast;
   final bool loading;
@@ -1546,12 +1498,13 @@ class _ForecastStrip extends StatelessWidget {
       return Container(
         padding: const EdgeInsets.all(18),
         decoration: BoxDecoration(
-          color: const Color(0xFF0a1828), borderRadius: BorderRadius.circular(8),
+          color: const Color(0xFF0a1828),
+          borderRadius: BorderRadius.circular(8),
           border: Border.all(color: const Color(0xFF1e3a5f)),
         ),
         child: const Center(
           child: Text('⚠️ Forecast feed unavailable — model backend offline',
-            style: TextStyle(color: Color(0xFF4a6080), fontSize: 12), textAlign: TextAlign.center),
+              style: TextStyle(color: Color(0xFF4a6080), fontSize: 12), textAlign: TextAlign.center),
         ),
       );
     }
@@ -1598,17 +1551,25 @@ class _ForecastStrip extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text('$wday $h$ampm', style: const TextStyle(
-                        color: Color(0xFF4a6080), fontSize: 8.5, fontWeight: FontWeight.w600), textAlign: TextAlign.center),
+                          color: Color(0xFF4a6080), fontSize: 8.5, fontWeight: FontWeight.w600),
+                          textAlign: TextAlign.center),
                       Text(_emoji(precip), style: const TextStyle(fontSize: 18)),
-                      Text('$temp°C', style: const TextStyle(color: Color(0xFFe2eaf5), fontSize: 11, fontWeight: FontWeight.w700)),
+                      Text('$temp°C', style: const TextStyle(
+                          color: Color(0xFFe2eaf5), fontSize: 11, fontWeight: FontWeight.w700)),
                       Column(children: [
                         Container(height: 3,
-                          decoration: BoxDecoration(color: const Color(0xFF1e3a5f), borderRadius: BorderRadius.circular(2)),
-                          child: FractionallySizedBox(widthFactor: precipPct, alignment: Alignment.centerLeft,
-                            child: Container(decoration: BoxDecoration(color: pc, borderRadius: BorderRadius.circular(2))))),
+                          decoration: BoxDecoration(
+                              color: const Color(0xFF1e3a5f),
+                              borderRadius: BorderRadius.circular(2)),
+                          child: FractionallySizedBox(widthFactor: precipPct,
+                              alignment: Alignment.centerLeft,
+                              child: Container(decoration: BoxDecoration(
+                                  color: pc, borderRadius: BorderRadius.circular(2))))),
                         const SizedBox(height: 3),
-                        Text('${precip.toStringAsFixed(1)}mm', style: TextStyle(color: pc, fontSize: 9, fontWeight: FontWeight.w600)),
-                        Text('$wind km/h', style: const TextStyle(color: Color(0xFF4a6080), fontSize: 8.5)),
+                        Text('${precip.toStringAsFixed(1)}mm',
+                            style: TextStyle(color: pc, fontSize: 9, fontWeight: FontWeight.w600)),
+                        Text('$wind km/h',
+                            style: const TextStyle(color: Color(0xFF4a6080), fontSize: 8.5)),
                       ]),
                     ],
                   ),
@@ -1622,7 +1583,7 @@ class _ForecastStrip extends StatelessWidget {
   }
 }
 
-// ── Radar Card (Windy only, simplified) ─────────────────────────────────────
+// ── Radar Card ────────────────────────────────────────────────────────────────
 class _RadarCard extends StatelessWidget {
   final WebViewController windyCtrl;
   const _RadarCard({required this.windyCtrl});
@@ -1639,25 +1600,22 @@ class _RadarCard extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('🛰 LIVE WEATHER RADAR', style: TextStyle(
-            color: Color(0xFF4a6080), fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.2)),
+              color: Color(0xFF4a6080), fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 1.2)),
           const SizedBox(height: 2),
           const Text('Windy.com · ECMWF Model · Surface Rain Overlay',
-            style: TextStyle(color: Color(0xFF4a6080), fontSize: 10)),
+              style: TextStyle(color: Color(0xFF4a6080), fontSize: 10)),
         ]),
       ),
       ClipRRect(
         borderRadius: const BorderRadius.only(
-          bottomLeft: Radius.circular(9), bottomRight: Radius.circular(9)),
-        child: SizedBox(
-          height: 280,
-          child: WebViewWidget(controller: windyCtrl),
-        ),
+            bottomLeft: Radius.circular(9), bottomRight: Radius.circular(9)),
+        child: SizedBox(height: 280, child: WebViewWidget(controller: windyCtrl)),
       ),
     ]),
   );
 }
 
-// ── Pulsing Dot ──────────────────────────────────────────────────────────────
+// ── Pulsing Dot ───────────────────────────────────────────────────────────────
 class _PulsingDot extends StatefulWidget {
   final Color color;
   const _PulsingDot({required this.color});
@@ -1668,14 +1626,18 @@ class _PulsingDot extends StatefulWidget {
 class _PulsingDotState extends State<_PulsingDot> with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
   late final Animation<double> _anim;
+
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this, duration: const Duration(seconds: 1))..repeat(reverse: true);
+    _ctrl = AnimationController(vsync: this, duration: const Duration(seconds: 1))
+      ..repeat(reverse: true);
     _anim = Tween<double>(begin: 0.4, end: 1.0).animate(_ctrl);
   }
+
   @override
   void dispose() { _ctrl.dispose(); super.dispose(); }
+
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: _anim,
@@ -1688,6 +1650,93 @@ class _PulsingDotState extends State<_PulsingDot> with SingleTickerProviderState
       ),
     ),
   );
+}
+
+// ── Pulsing Marker (critical/warning flood markers) ───────────────────────────
+class _PulsingMarker extends StatefulWidget {
+  final Color color;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _PulsingMarker({
+    required this.color,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  State<_PulsingMarker> createState() => _PulsingMarkerState();
+}
+
+class _PulsingMarkerState extends State<_PulsingMarker>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _scale;
+  late final Animation<double> _opacity;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat();
+    _scale   = Tween(begin: 1.0, end: 2.2).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+    _opacity = Tween(begin: 0.6, end: 0.0).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+  }
+
+  @override
+  void dispose() { _ctrl.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) {
+    final size     = widget.isSelected ? 52.0 : 44.0;
+    final iconSize = widget.isSelected ? 26.0 : 22.0;
+
+    return GestureDetector(
+      onTap: widget.onTap,
+      child: SizedBox(
+        width: size, height: size,
+        child: Stack(alignment: Alignment.center, children: [
+          // Ripple ring
+          AnimatedBuilder(
+            animation: _ctrl,
+            builder: (_, __) => Transform.scale(
+              scale: _scale.value,
+              child: Container(
+                width: size * 0.7, height: size * 0.7,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: widget.color.withValues(alpha: _opacity.value),
+                    width: 2,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          // Core marker
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: size * 0.75, height: size * 0.75,
+            decoration: BoxDecoration(
+              color: widget.color.withValues(alpha: 0.2),
+              shape: BoxShape.circle,
+              border: Border.all(color: widget.color, width: widget.isSelected ? 3 : 2),
+              boxShadow: [
+                BoxShadow(
+                  color: widget.color.withValues(alpha: 0.5),
+                  blurRadius: widget.isSelected ? 14 : 6,
+                  spreadRadius: widget.isSelected ? 3 : 1,
+                ),
+              ],
+            ),
+            child: Icon(Icons.water_rounded, color: widget.color, size: iconSize),
+          ),
+        ]),
+      ),
+    );
+  }
 }
 
 // ── Extension helpers ─────────────────────────────────────────────────────────
