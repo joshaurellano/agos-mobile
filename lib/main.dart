@@ -63,7 +63,7 @@ class AgosApp extends StatelessWidget {
         // NotificationService pushes this route when the user taps a notification.
         // MainShell handles showing the Alert tab — see note below if you need
         // to deep-link to a specific tab index.
-        '/alert': (_) => const MainShell(initialTabIndex: 1),
+        '/alert': (_) => const MainShell(initialTabIndex: 2),
       },
       home: Consumer<AuthService>(
         builder: (_, auth, __) {

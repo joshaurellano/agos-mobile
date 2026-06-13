@@ -6,9 +6,10 @@ import '../services/auth_service.dart';
 import 'dashboard_screen.dart';
 import 'alert_screen.dart';
 import 'evacuation_screen.dart';
+import 'rainfall_screen.dart';
 
 class MainShell extends StatefulWidget {
-  // initialTabIndex lets a notification tap open directly on Alerts (index 1)
+  // initialTabIndex lets a notification tap open directly on Alerts (index 2)
   final int initialTabIndex;
   const MainShell({super.key, this.initialTabIndex = 0});
 
@@ -116,6 +117,7 @@ class _MainShellState extends State<MainShell> {
 
     final screens = [
       DashboardScreen(onAlertChanged: _onAlertChanged),
+      const RainfallScreen(),
       const AlertScreen(),
       const EvacuationScreen(),
     ];
@@ -221,6 +223,10 @@ class _MainShellState extends State<MainShell> {
               BottomNavigationBarItem(
                 icon: Icon(Icons.dashboard_rounded, size: 22),
                 label: 'Dashboard',
+              ),
+              BottomNavigationBarItem(
+                icon: Icon(Icons.water_drop_rounded, size: 22),
+                label: 'Rainfall',
               ),
               BottomNavigationBarItem(
                 icon: Icon(Icons.notifications_rounded, size: 22),

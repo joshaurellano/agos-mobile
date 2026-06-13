@@ -363,18 +363,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ? (_pred!.rainfallMm > 10 ? '🔴 Heavy' : _pred!.rainfallMm > 2 ? '🟡 Moderate' : '🟢 Light')
                       : null,
                 ),
-                _MetricCard(
-                  icon: '🌀', label: 'PAGASA Wind Signal',
-                  value: _pred != null ? '#${_pred!.windSignal}' : '—',
-                  sub: _windSub, color: _windColor,
-                ),
-                _MetricCard(
-                  icon: '🤖', label: 'Flood Probability',
-                  value: _loading ? '...' : pct,
-                  sub: _pred != null ? 'Humidity: ${_pred!.humidity}% · LSTM v1' : 'LSTM Model · Cloud Run',
-                  color: _probabilityColor,
-                  badge: _pred != null ? 'LSTM Prediction' : null,
-                ),
               ],
             ),
             const SizedBox(height: 18),
@@ -382,34 +370,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
             _FloodMapCard(currentAlertKey: _currentAlertKey, alertColor: _alertColor),
             const SizedBox(height: 18),
 
-            const _SectionLabel(icon: '💧', text: 'Water Level Gauge'),
-            const SizedBox(height: 8),
-            _WaterLevelGaugeCard(
-              level: lvl != null && hasRain ? lvl : null,
-              color: lvl != null && hasRain ? _waterColor : const Color(0xFF4a6080),
-            ),
-            const SizedBox(height: 18),
-
             const _SectionLabel(icon: '🚦', text: 'Alert Level Reference'),
             const SizedBox(height: 8),
             _AlertLevelTable(currentAlertKey: _currentAlertKey),
             const SizedBox(height: 18),
-
-            _SystemStatusPanel(
-              modelOnline: !_error && !_loading && _pred != null,
-              modelLoading: _loading,
-              modelError: _error ? 'Model backend offline' : null,
-              forecastOnline: !_forecastLoading && _forecast.isNotEmpty,
-              forecastLoading: _forecastLoading,
-              forecastCount: _forecast.length,
-              formatTime: _formatTime,
-            ),
-            const SizedBox(height: 18),
-
-            if (_pred != null) ...[
-              _PredictionInputTable(pred: _pred!),
-              const SizedBox(height: 18),
-            ],
 
             _FloodForecastChart(),
             const SizedBox(height: 18),
@@ -742,114 +706,6 @@ class _FloodMapCard extends StatelessWidget {
   }
 }
 
-// ── Water Level Gauge Card ────────────────────────────────────────────────────
-class _WaterLevelGaugeCard extends StatelessWidget {
-  final double? level;
-  final Color color;
-  const _WaterLevelGaugeCard({required this.level, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    const maxLevel = 6.0;
-    final pct = level != null ? (level! / maxLevel).clamp(0.0, 1.0) : 0.0;
-
-    final thresholds = [
-      (value: 2.5, color: const Color(0xFFeab308), label: 'Advisory'),
-      (value: 3.5, color: const Color(0xFFf97316), label: 'Warning'),
-      (value: 4.5, color: const Color(0xFFef4444), label: 'Critical'),
-    ];
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0d1f3c),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFF1e3a5f)),
-      ),
-      child: IntrinsicHeight(
-        child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          SizedBox(
-            width: 28, height: 180,
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [6, 5, 4, 3, 2, 1, 0].map((v) =>
-                Text('${v}m', style: const TextStyle(
-                    color: Color(0xFF4a6080), fontSize: 8.5, fontWeight: FontWeight.w600)),
-              ).toList(),
-            ),
-          ),
-          const SizedBox(width: 6),
-          Container(
-            width: 36, height: 180,
-            decoration: BoxDecoration(
-              color: const Color(0xFF152a4a),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: const Color(0xFF1e3a5f)),
-            ),
-            child: Stack(children: [
-              ...thresholds.map((t) => Positioned(
-                bottom: (t.value / maxLevel) * 180,
-                left: 0, right: 0,
-                child: Container(height: 1, color: t.color.withValues(alpha: 0.7)),
-              )),
-              Positioned(
-                bottom: 0, left: 0, right: 0,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 800),
-                  height: 180 * pct,
-                  decoration: BoxDecoration(
-                    color: color.withValues(alpha: 0.85),
-                    borderRadius: const BorderRadius.only(
-                      bottomLeft: Radius.circular(5), bottomRight: Radius.circular(5)),
-                  ),
-                ),
-              ),
-            ]),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('EST. WATER LEVEL', style: TextStyle(
-                color: Color(0xFF4a6080), fontSize: 8.5,
-                fontWeight: FontWeight.w700, letterSpacing: 1.0,
-              )),
-              const SizedBox(height: 6),
-              Text(
-                level != null ? '${level}m' : 'N/A',
-                style: TextStyle(color: color, fontSize: 36, fontWeight: FontWeight.w900, height: 1),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                level == null    ? 'No model data available'
-                : level! >= 4.5  ? 'Critical — immediate action required'
-                : level! >= 3.5  ? 'Warning — monitor closely'
-                : level! >= 2.5  ? 'Advisory — elevated risk'
-                : 'Within normal range',
-                style: const TextStyle(color: Color(0xFF8da4be), fontSize: 10.5, height: 1.4),
-              ),
-              const SizedBox(height: 14),
-              ...thresholds.map((t) => Padding(
-                padding: const EdgeInsets.only(bottom: 5),
-                child: Row(children: [
-                  Container(width: 16, height: 2, decoration: BoxDecoration(
-                      color: t.color, borderRadius: BorderRadius.circular(1))),
-                  const SizedBox(width: 6),
-                  Text('${t.label} (${t.value}m)',
-                      style: const TextStyle(color: Color(0xFF4a6080), fontSize: 9.5)),
-                ]),
-              )),
-              const SizedBox(height: 8),
-              const Text('Baseline 1.4m + rain ×0.045',
-                  style: TextStyle(color: Color(0xFF2a4060), fontSize: 8.5)),
-            ]),
-          ),
-        ]),
-      ),
-    );
-  }
-}
-
 // ── Alert Level Reference Table ───────────────────────────────────────────────
 class _AlertLevelTable extends StatelessWidget {
   final String currentAlertKey;
@@ -858,10 +714,27 @@ class _AlertLevelTable extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final levels = [
-      (key: 'NORMAL',   range: '< 2.5m',     action: 'Continue normal activities. Monitor updates.'),
-      (key: 'ADVISORY', range: '2.5 – 3.4m', action: 'Stay alert. Prepare emergency go-bags.'),
-      (key: 'WARNING',  range: '3.5 – 4.4m', action: 'Move valuables to higher ground. Be ready to evacuate.'),
-      (key: 'CRITICAL', range: '≥ 4.5m',     action: 'Evacuate immediately to designated evacuation centers.'),
+      (key: 'NORMAL', range: '< 2.5m', actions: [
+        'Continue normal activities.',
+        'Check the dashboard occasionally for updates.',
+      ]),
+      (key: 'ADVISORY', range: '2.5 – 3.4m', actions: [
+        'Stay alert and monitor rainfall updates.',
+        'Prepare an emergency go-bag.',
+        'Move vehicles and valuables away from low-lying areas.',
+      ]),
+      (key: 'WARNING', range: '3.5 – 4.4m', actions: [
+        'Move valuables and appliances to higher ground.',
+        'Charge phones and power banks.',
+        'Keep go-bags ready near the door.',
+        'Avoid flooded roads and bridges.',
+      ]),
+      (key: 'CRITICAL', range: '≥ 4.5m', actions: [
+        'Evacuate immediately to the nearest designated center.',
+        'Turn off electrical mains before leaving, if safe.',
+        'Assist elderly, children, and PWDs first.',
+        'Follow official evacuation routes only.',
+      ]),
     ];
 
     return ClipRRect(
@@ -902,10 +775,23 @@ class _AlertLevelTable extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 Expanded(child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Expanded(child: Text(item.action, style: TextStyle(
-                    color: isCur ? const Color(0xFFe2eaf5) : const Color(0xFF4a6080),
-                    fontSize: 10.5, height: 1.4,
-                  ))),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      ...item.actions.map((a) => Padding(
+                        padding: const EdgeInsets.only(bottom: 2),
+                        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text('•  ', style: TextStyle(
+                            color: isCur ? color : const Color(0xFF2a4060),
+                            fontSize: 10.5, height: 1.4,
+                          )),
+                          Expanded(child: Text(a, style: TextStyle(
+                            color: isCur ? const Color(0xFFe2eaf5) : const Color(0xFF4a6080),
+                            fontSize: 10.5, height: 1.4,
+                          ))),
+                        ]),
+                      )),
+                    ]),
+                  ),
                   if (isCur) ...[
                     const SizedBox(width: 6),
                     Container(
