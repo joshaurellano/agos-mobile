@@ -520,7 +520,7 @@ class _AlertHeader extends StatelessWidget {
                   )),
                   const SizedBox(height: 4),
                   Text(
-                    pred != null ? pred!.status : '⚠️ Flooding possible in next 6 hrs',
+                    pred != null ? pred!.status : '⚠️ Flooding possible in next 1-3 hrs',
                     style: const TextStyle(color: Color(0xFFe2eaf5), fontSize: 12.5, fontWeight: FontWeight.w600),
                   ),
                   if (pred != null) ...[
@@ -705,7 +705,7 @@ class _FloodMapCard extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
           child: const Text(
-            'Approximate barangay boundary · Source: PAGASA & OCD Region V',
+            'Approximate barangay boundary',
             style: TextStyle(color: Color(0xFF4a6080), fontSize: 9.5),
           ),
         ),
@@ -1196,8 +1196,6 @@ class _FloodForecastChartState extends State<_FloodForecastChart> {
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: const [
           Flexible(child: Text('Source: flood_snapshots · Poll: 30s · Realtime active',
               style: TextStyle(color: Color(0xFF4a6080), fontSize: 8.5))),
-          Text('Situational awareness only',
-              style: TextStyle(color: Color(0xFF4a6080), fontSize: 8.5)),
         ]),
       ]),
     );
