@@ -113,7 +113,7 @@ class _Prediction {
       rainfallMm:  (parseNum(m['rainfall_mm']))?.toDouble() ?? 0.0,
       windSignal:  (parseNum(m['wind_signal']))?.toInt()   ?? 0,
       humidity:    (parseNum(m['humidity']))?.toInt()      ?? 0,
-      leadTime:     j['lead_time_estimate']?.toString()    ?? '6–12 hrs',
+      leadTime:     j['lead_time_estimate']?.toString()    ?? '1–3 hrs',
     );
   }
 
@@ -345,25 +345,33 @@ class _DashboardScreenState extends State<DashboardScreen> {
               mainAxisSpacing: 10,
               crossAxisSpacing: 10,
               children: [
-                _MetricCard(
-                  icon: '💧', label: 'Est. Water Level',
-                  value: lvl != null && hasRain ? '${lvl}m' : 'N/A',
-                  sub: _waterSub,
-                  color: lvl != null && hasRain ? _waterColor : const Color(0xFF4a6080),
-                  badge: lvl != null && hasRain ? _waterBadge : null,
-                  dim: lvl == null || !hasRain,
-                ),
-                _MetricCard(
-                  icon: '🌧', label: 'Rainfall Intensity',
-                  value: _pred != null ? _pred!.rainfallMm.toStringAsFixed(1) : '—',
-                  unit: 'mm/hr',
-                  sub: _pred != null ? 'OpenMeteo · Live feed' : 'PAGASA Station',
-                  color: const Color(0xFF38bdf8),
-                  badge: _pred != null
-                      ? (_pred!.rainfallMm > 10 ? '🔴 Heavy' : _pred!.rainfallMm > 2 ? '🟡 Moderate' : '🟢 Light')
-                      : null,
-                ),
-              ],
+              _MetricCard(
+                icon: '🤖', label: 'Flood Probability',
+                value: _pred != null ? '${(_pred!.probability * 100).toStringAsFixed(0)}' : '—',
+                unit: '%',
+                sub: _pred != null ? 'LSTM model output · Live' : 'Model offline',
+                color: _probabilityColor,
+                badge: _pred != null
+                    ? (_pred!.probability >= 0.75 ? '⛔ CRITICAL'
+                      : _pred!.probability >= 0.50 ? '⚠ HIGH'
+                      : _pred!.probability >= 0.25 ? '📢 ELEVATED'
+                      : '✅ LOW')
+                    : null,
+                dim: _pred == null,
+              ),
+              _MetricCard(
+                icon: '🌧', label: 'Rainfall Intensity',
+                value: _pred != null ? _pred!.rainfallMm.toStringAsFixed(1) : '—',
+                unit: 'mm/hr',
+                sub: _pred != null ? 'OpenMeteo · Live feed' : 'PAGASA Station',
+                color: const Color(0xFF38bdf8),
+                badge: _pred != null
+                    ? (_pred!.rainfallMm > 10 ? '🔴 Heavy'
+                      : _pred!.rainfallMm > 2 ? '🟡 Moderate'
+                      : '🟢 Light')
+                    : null,
+              ),
+            ],
             ),
             const SizedBox(height: 18),
 
