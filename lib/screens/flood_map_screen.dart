@@ -5,31 +5,28 @@
 // the barangay flood-zone map (color-coded by current alert level), with the
 // same vertical map-tool stack (zoom / locate / layers) used elsewhere.
 //
-// The old "Live Radar" (Windy embed) layer has been removed entirely — this
-// screen no longer depends on webview_flutter.
+// "3D View" implementation note (rewritten):
+// The previous version faked 3D by capturing a RepaintBoundary screenshot of
+// the flat map and applying a Transform/perspective tilt to that still
+// image. That's gone. This version uses `maplibre_gl` (flutter-maplibre-gl,
+// https://pub.dev/packages/maplibre_gl) to render a REAL tilted vector map —
+// the same engine family (MapLibre GL) your web dashboard's FloodMap3D.jsx
+// already uses, so the visual language matches: a dashed boundary outline
+// plus an extruded, semi-transparent "water slab" whose height/opacity scale
+// with the current alert level.
 //
-// "3D View" implementation note:
-// The live, interactive FlutterMap widget is ALWAYS mounted with a stable
-// key and is NEVER wrapped in a Transform/IgnorePointer that changes its
-// ancestor chain — doing that previously caused flutter_map's element to be
-// torn down/reparented on every toggle, which under race conditions with the
-// periodic status timer produced "Looking up a deactivated widget's ancestor
-// is unsafe" crashes.
-//
-// Instead, "3D View" captures a still image of the currently-rendered map
-// (via RepaintBoundary.toImage()) and applies the perspective tilt to that
-// static image in a completely separate overlay widget. The real map keeps
-// living underneath, untouched, the whole time. A small animated isometric
-// bar overlay on top shows the live flood probability.
+// 2D and 3D are two fully separate widgets that get conditionally mounted —
+// same pattern as the web dashboard (`mapView === '2d' ? <FloodMap/> :
+// <FloodMap3D/>`). Nothing wraps or reparents the live FlutterMap anymore,
+// so there's no interaction between the periodic status timer and a
+// mid-rebuild widget-tree change.
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math' as math;
-import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart' hide Path;
+import 'package:maplibre_gl/maplibre_gl.dart' as maplibre;
 import 'package:http/http.dart' as http;
 import '../main.dart';
 import '../theme/panahon_ui.dart';
@@ -46,7 +43,29 @@ const _alertColors = {
   'CRITICAL': Color(0xFFef4444),
 };
 
+// Hex strings for the same palette, since maplibre layer properties want
+// CSS-style color strings rather than Flutter Colors.
+const _alertColorsHex = {
+  'NORMAL':   '#22c55e',
+  'ADVISORY': '#eab308',
+  'WARNING':  '#f97316',
+  'CRITICAL': '#ef4444',
+};
+
 const _alertLevelKeys = ['NORMAL', 'ADVISORY', 'WARNING', 'CRITICAL'];
+
+// Extruded water-slab height (meters, stylized) / opacity per alert level —
+// mirrors ALERT_WATER in the web FloodMap3D.jsx so both platforms read the
+// same severity language.
+const _alertWaterHeight = {
+  'NORMAL': 0.0, 'ADVISORY': 0.0, 'WARNING': 3.2, 'CRITICAL': 5.5,
+};
+const _alertWaterOpacity = {
+  'NORMAL': 0.0, 'ADVISORY': 0.0, 'WARNING': 0.42, 'CRITICAL': 0.55,
+};
+
+const _waterColorHex = '#1e88e5';
+const _boundaryColorHex = '#38bdf8';
 
 String _alertKeyFromInt(int level) {
   switch (level) {
@@ -56,6 +75,14 @@ String _alertKeyFromInt(int level) {
     default: return 'NORMAL';
   }
 }
+
+// OpenFreeMap's free, no-key vector styles — same three used on web.
+const _styleUrls = {
+  'liberty':  'https://tiles.openfreemap.org/styles/liberty',
+  'bright':   'https://tiles.openfreemap.org/styles/bright',
+  'positron': 'https://tiles.openfreemap.org/styles/positron',
+};
+const _styleLabels = {'liberty': 'Liberty', 'bright': 'Bright', 'positron': 'Positron'};
 
 // ─── Barangay Triangulo boundary ──────────────────────────────────────────────
 const _trianguloPolygon = [
@@ -87,6 +114,33 @@ const _trianguloPolygon = [
 
 const _trianguloCenter = LatLng(13.6140, 123.1915);
 
+// GeoJSON helpers ------------------------------------------------------------
+
+/// Boundary as a closed ring, [lng, lat] order, for fill-extrusion / line
+/// sources (maplibre / GeoJSON always wants lng first).
+List<List<double>> _boundaryRing() {
+  final ring = _trianguloPolygon.map((p) => [p.longitude, p.latitude]).toList();
+  final first = ring.first;
+  final last = ring.last;
+  if (first[0] != last[0] || first[1] != last[1]) ring.add(first);
+  return ring;
+}
+
+Map<String, dynamic> _boundaryPolygonGeoJson() => {
+  'type': 'Feature',
+  'properties': {},
+  'geometry': {'type': 'Polygon', 'coordinates': [_boundaryRing()]},
+};
+
+Map<String, dynamic> _boundaryLineGeoJson() => {
+  'type': 'Feature',
+  'properties': {},
+  'geometry': {
+    'type': 'LineString',
+    'coordinates': _trianguloPolygon.map((p) => [p.longitude, p.latitude]).toList(),
+  },
+};
+
 // ─── Screen ───────────────────────────────────────────────────────────────────
 class FloodMapScreen extends StatefulWidget {
   const FloodMapScreen({super.key});
@@ -95,38 +149,26 @@ class FloodMapScreen extends StatefulWidget {
   State<FloodMapScreen> createState() => _FloodMapScreenState();
 }
 
-class _FloodMapScreenState extends State<FloodMapScreen>
-    with SingleTickerProviderStateMixin {
-  // '2d' = flat interactive map, '3d' = tilted snapshot + risk-bar overlay
+class _FloodMapScreenState extends State<FloodMapScreen> {
+  // '2d' = flat interactive flutter_map, '3d' = tilted MapLibre vector map
   String _layer = '2d';
 
   String _alertKey = 'NORMAL';
   double? _probability;
   bool _loading = true;
-  DateTime _lastUpdated = DateTime.now();
   Timer? _timer;
 
   bool _showLegend = false;
   double _zoom = 14.5;
   final MapController _mapController = MapController();
 
-  // Key on the RepaintBoundary that wraps the live map, used to grab a
-  // still image of it for the 3D tilt effect.
-  final GlobalKey _mapBoundaryKey = GlobalKey();
-  ui.Image? _mapSnapshot;
-  bool _capturingSnapshot = false;
-
-  // Slow continuous drift used to animate the 3D risk-bar (and give the
-  // tilted view a subtle sense of life without needing touch gestures).
-  late final AnimationController _driftCtrl;
+  // Controller for the live 3D map — only valid while _layer == '3d' and the
+  // widget is mounted; every use is guarded accordingly.
+  maplibre.MapLibreMapController? _maplibreController;
 
   @override
   void initState() {
     super.initState();
-    _driftCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 26),
-    )..repeat();
     _fetchStatus();
     _timer = Timer.periodic(const Duration(seconds: 30), (_) => _fetchStatus());
   }
@@ -135,8 +177,6 @@ class _FloodMapScreenState extends State<FloodMapScreen>
   void dispose() {
     _timer?.cancel();
     _timer = null;
-    _driftCtrl.dispose();
-    _mapSnapshot?.dispose();
     super.dispose();
   }
 
@@ -151,10 +191,9 @@ class _FloodMapScreenState extends State<FloodMapScreen>
         final prob  = (j['probability'] as num?)?.toDouble();
         if (!mounted) return;
         setState(() {
-          _alertKey     = _alertKeyFromInt(level);
-          _probability  = prob;
-          _loading      = false;
-          _lastUpdated  = DateTime.now();
+          _alertKey    = _alertKeyFromInt(level);
+          _probability = prob;
+          _loading     = false;
         });
       } else {
         if (mounted) setState(() => _loading = false);
@@ -166,64 +205,43 @@ class _FloodMapScreenState extends State<FloodMapScreen>
 
   void _zoomBy(double delta) {
     if (!mounted) return;
-    final target = (_zoom + delta).clamp(12.0, 19.0);
-    setState(() => _zoom = target);
-    try {
-      _mapController.move(_mapController.camera.center, target);
-      if (_layer == '3d') _captureMapSnapshot();
-    } catch (_) {
-      // Map not currently attached — safe to ignore.
+    if (_layer == '2d') {
+      final target = (_zoom + delta).clamp(12.0, 19.0);
+      setState(() => _zoom = target);
+      try {
+        _mapController.move(_mapController.camera.center, target);
+      } catch (_) {
+        // Map not currently attached — safe to ignore.
+      }
+    } else {
+      _maplibreController?.animateCamera(maplibre.CameraUpdate.zoomBy(delta));
     }
   }
 
   void _recenter() {
     if (!mounted) return;
-    setState(() => _zoom = 14.5);
-    try {
-      _mapController.move(_trianguloCenter, _zoom);
-      if (_layer == '3d') _captureMapSnapshot();
-    } catch (_) {
-      // Map not currently attached — safe to ignore.
+    if (_layer == '2d') {
+      setState(() => _zoom = 14.5);
+      try {
+        _mapController.move(_trianguloCenter, _zoom);
+      } catch (_) {
+        // Map not currently attached — safe to ignore.
+      }
+    } else {
+      _maplibreController?.animateCamera(
+        maplibre.CameraUpdate.newCameraPosition(
+          const maplibre.CameraPosition(
+            target: maplibre.LatLng(13.6140, 123.1915),
+            zoom: 16.2, tilt: 55, bearing: -17,
+          ),
+        ),
+      );
     }
   }
 
   void _selectLayer(String layer) {
     if (_layer == layer) return;
     setState(() => _layer = layer);
-    if (layer == '3d') _captureMapSnapshot();
-  }
-
-  // Grabs a still image of the currently-rendered map for the 3D tilt.
-  // The live FlutterMap widget itself is never touched/transformed — only
-  // this snapshot image is, so the interactive map's element is never at
-  // risk of being torn down mid-frame.
-  Future<void> _captureMapSnapshot() async {
-    if (!mounted) return;
-    setState(() => _capturingSnapshot = true);
-    try {
-      // Give tiles a moment to finish painting before snapshotting them.
-      await Future.delayed(const Duration(milliseconds: 350));
-      if (!mounted) return;
-
-      final renderObject = _mapBoundaryKey.currentContext?.findRenderObject();
-      if (renderObject is! RenderRepaintBoundary) {
-        if (mounted) setState(() => _capturingSnapshot = false);
-        return;
-      }
-
-      final image = await renderObject.toImage(pixelRatio: 1.5);
-      if (!mounted) {
-        image.dispose();
-        return;
-      }
-      setState(() {
-        _mapSnapshot?.dispose();
-        _mapSnapshot = image;
-        _capturingSnapshot = false;
-      });
-    } catch (_) {
-      if (mounted) setState(() => _capturingSnapshot = false);
-    }
   }
 
   @override
@@ -266,7 +284,41 @@ class _FloodMapScreenState extends State<FloodMapScreen>
                 decoration: BoxDecoration(
                   border: Border.all(color: const Color(0xFF1e3a5f)),
                 ),
-                child: _buildMap(color, is3D: _layer == '3d'),
+                child: Stack(children: [
+                  Positioned.fill(
+                    child: _layer == '2d'
+                        ? _build2DMap(color)
+                        : _Maplibre3DMap(
+                            alertKey: _alertKey,
+                            onMapCreated: (c) => _maplibreController = c,
+                          ),
+                  ),
+
+                  // ── Status bar ─────────────────────────────────────────
+                  Positioned(top: 10, left: 10, right: 58, child: _statusPill(color)),
+
+                  // ── Legend panel ───────────────────────────────────────
+                  if (_showLegend) Positioned(top: 62, right: 56, child: _legendPanel()),
+
+                  // ── Vertical map tool stack ────────────────────────────
+                  Positioned(
+                    top: 62,
+                    right: 10,
+                    child: MapToolStack(children: [
+                      MapToolButton(
+                        icon: Icons.layers_rounded,
+                        active: _showLegend,
+                        onTap: () => setState(() => _showLegend = !_showLegend),
+                      ),
+                      MapToolButton(icon: Icons.my_location_rounded, onTap: _recenter),
+                      MapToolButton(icon: Icons.add_rounded, onTap: () => _zoomBy(1)),
+                      MapToolButton(icon: Icons.remove_rounded, onTap: () => _zoomBy(-1)),
+                    ]),
+                  ),
+
+                  // ── Caption ─────────────────────────────────────────────
+                  Positioned(bottom: 10, left: 10, right: 10, child: _captionBar(_layer == '3d')),
+                ]),
               ),
             ),
           ),
@@ -276,25 +328,18 @@ class _FloodMapScreenState extends State<FloodMapScreen>
     );
   }
 
-  // ── Map (shared 2D/3D render) ───────────────────────────────────────────
-  Widget _buildMap(Color color, {required bool is3D}) {
-    // The live, interactive map. Stable key + never wrapped in a Transform —
-    // its ancestor chain is identical every single build, in 2D or 3D mode.
-    final liveMap = RepaintBoundary(
-      key: _mapBoundaryKey,
+  // ── 2D flat interactive map (unchanged flutter_map layer) ──────────────
+  Widget _build2DMap(Color color) {
+    return ColoredBox(
+      color: AppColors.bgDark,
       child: FlutterMap(
-        key: const ValueKey('agos_flood_map'),
+        key: const ValueKey('agos_flood_map_2d'),
         mapController: _mapController,
         options: MapOptions(
           initialCenter: _trianguloCenter,
           initialZoom: _zoom,
-          // Real pan/zoom always stays on this flat map. In 3D mode it's
-          // simply hidden underneath the tilted snapshot overlay, so we
-          // disable touch on it rather than remove/rebuild it.
-          interactionOptions: InteractionOptions(
-            flags: is3D
-                ? InteractiveFlag.none
-                : (InteractiveFlag.pinchZoom | InteractiveFlag.drag),
+          interactionOptions: const InteractionOptions(
+            flags: InteractiveFlag.pinchZoom | InteractiveFlag.drag,
           ),
         ),
         children: [
@@ -322,76 +367,6 @@ class _FloodMapScreenState extends State<FloodMapScreen>
         ],
       ),
     );
-
-    return Stack(children: [
-      // Real map always mounted underneath, untouched.
-      Positioned.fill(child: ColoredBox(color: AppColors.bgDark, child: liveMap)),
-
-      // 3D overlay: a separate, freely add/removable widget — safe because
-      // it holds no long-lived controllers, just a still image + a painter.
-      if (is3D)
-        Positioned.fill(
-          child: IgnorePointer(
-            child: ColoredBox(
-              color: AppColors.bgDark,
-              child: _mapSnapshot != null
-                  ? Transform(
-                      alignment: FractionalOffset.center,
-                      transform: Matrix4.identity()
-                        ..setEntry(3, 2, 0.0016) // perspective depth
-                        ..rotateX(1.05),          // ~60° tilt
-                      child: RawImage(image: _mapSnapshot, fit: BoxFit.cover),
-                    )
-                  : const Center(
-                      child: SizedBox(
-                        width: 22, height: 22,
-                        child: CircularProgressIndicator(color: AppColors.accent, strokeWidth: 2),
-                      ),
-                    ),
-            ),
-          ),
-        ),
-
-      // Floating isometric bar showing live flood-probability magnitude.
-      if (is3D)
-        Positioned.fill(
-          child: AnimatedBuilder(
-            animation: _driftCtrl,
-            builder: (context, _) => CustomPaint(
-              painter: _RiskBarPainter(
-                color: color,
-                probability: _probability ?? 0,
-                phase: _driftCtrl.value * 2 * math.pi,
-              ),
-            ),
-          ),
-        ),
-
-      // ── Status bar ───────────────────────────────────────────────────────
-      Positioned(top: 10, left: 10, right: 58, child: _statusPill(color)),
-
-      // ── Legend panel ─────────────────────────────────────────────────────
-      if (_showLegend) Positioned(top: 62, right: 56, child: _legendPanel()),
-
-      // ── Vertical map tool stack ──────────────────────────────────────────
-      Positioned(
-        top: 62,
-        right: 10,
-        child: MapToolStack(children: [
-          MapToolButton(
-            icon: Icons.layers_rounded,
-            active: _showLegend,
-            onTap: () => setState(() => _showLegend = !_showLegend),
-          ),
-          MapToolButton(icon: Icons.my_location_rounded, onTap: _recenter),
-          MapToolButton(icon: Icons.add_rounded, onTap: () => _zoomBy(1)),
-          MapToolButton(icon: Icons.remove_rounded, onTap: () => _zoomBy(-1)),
-        ]),
-      ),
-
-      // ── Caption ───────────────────────────────────────────────────────────
-      Positioned(bottom: 10, left: 10, right: 10, child: _captionBar(is3D)),
-    ]);
   }
 
   // ── Shared UI pieces ────────────────────────────────────────────────────
@@ -419,7 +394,7 @@ class _FloodMapScreenState extends State<FloodMapScreen>
                   style: const TextStyle(color: AppColors.textMuted, fontSize: 9.5)),
           ]),
         ),
-        if (_loading || _capturingSnapshot)
+        if (_loading)
           const SizedBox(
             width: 12, height: 12,
             child: CircularProgressIndicator(color: AppColors.accent, strokeWidth: 1.5),
@@ -477,7 +452,7 @@ class _FloodMapScreenState extends State<FloodMapScreen>
       ),
       child: Text(
         is3D
-            ? 'Tilted 3D view · bar height reflects live flood probability'
+            ? 'Tilted 3D view · flood plane height reflects live probability'
             : 'Approximate barangay boundary · color-coded by current water code',
         style: const TextStyle(color: AppColors.textMuted, fontSize: 9.5),
       ),
@@ -485,94 +460,167 @@ class _FloodMapScreenState extends State<FloodMapScreen>
   }
 }
 
-// ── Isometric risk-bar painter (3D view overlay) ────────────────────────────
+// ── Real 3D MapLibre view ───────────────────────────────────────────────────
 //
-// Draws a small extruded box near the center of the tilted map whose height
-// scales with the live flood probability and whose color matches the current
-// alert level. `phase` drives a gentle azimuth sway so the box doesn't look
-// static, without needing any touch/rotation gesture.
-class _RiskBarPainter extends CustomPainter {
-  final Color color;
-  final double probability; // 0..1
-  final double phase;
+// Mirrors the web FloodMap3D.jsx: tilted vector basemap (OpenFreeMap,
+// switchable Liberty/Bright/Positron), a dashed boundary outline, and an
+// extruded translucent "water slab" over the barangay polygon whose height
+// and opacity scale with the current alert level.
+//
+// NOTE: `maplibre_gl`'s layer-property classes (FillExtrusionLayerProperties,
+// LineLayerProperties, GeojsonSourceProperties, etc.) are code-generated from
+// the MapLibre style spec and their exact field names can shift slightly
+// between package versions — double check field names against the version
+// pinned in pubspec.yaml (see the package's example app / API docs) if this
+// doesn't compile as-is.
+class _Maplibre3DMap extends StatefulWidget {
+  final String alertKey;
+  final ValueChanged<maplibre.MapLibreMapController> onMapCreated;
 
-  _RiskBarPainter({required this.color, required this.probability, required this.phase});
-
-  Offset _iso(double x, double y, double z, Offset origin) {
-    const cos30 = 0.8660254;
-    const sin30 = 0.5;
-    final sx = (x - z) * cos30;
-    final sy = (x + z) * sin30 - y;
-    return origin + Offset(sx, sy);
-  }
+  const _Maplibre3DMap({required this.alertKey, required this.onMapCreated});
 
   @override
-  void paint(Canvas canvas, Size size) {
-    final origin = Offset(size.width / 2, size.height * 0.60);
+  State<_Maplibre3DMap> createState() => _Maplibre3DMapState();
+}
 
-    final spin = math.sin(phase) * 0.35; // gentle sway, radians
-    final cosS = math.cos(spin), sinS = math.sin(spin);
+class _Maplibre3DMapState extends State<_Maplibre3DMap> {
+  maplibre.MapLibreMapController? _controller;
+  String _styleKey = 'liberty';
+  bool _styleReady = false;
 
-    double rx(double x, double z) => x * cosS - z * sinS;
-    double rz(double x, double z) => x * sinS + z * cosS;
+  Future<void> _onStyleLoaded() async {
+    final c = _controller;
+    if (c == null) return;
 
-    const halfW = 20.0, halfD = 13.0;
-    final h = 26.0 + probability.clamp(0.0, 1.0) * 150.0;
-
-    Offset p(double x, double y, double z) => _iso(rx(x, z), y, rz(x, z), origin);
-
-    final a  = p(-halfW, 0, -halfD);
-    final b  = p(halfW, 0, -halfD);
-    final c  = p(halfW, 0, halfD);
-    final d  = p(-halfW, 0, halfD);
-    final a2 = p(-halfW, h, -halfD);
-    final b2 = p(halfW, h, -halfD);
-    final c2 = p(halfW, h, halfD);
-    final d2 = p(-halfW, h, halfD);
-
-    // Ground shadow
-    final shadowPaint = Paint()
-      ..color = Colors.black.withValues(alpha: 0.35)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
-    canvas.drawOval(
-      Rect.fromCenter(center: origin + const Offset(0, 4), width: 60, height: 22),
-      shadowPaint,
+    // Boundary outline.
+    await c.addSource('triangulo-boundary',
+        maplibre.GeojsonSourceProperties(data: _boundaryLineGeoJson()));
+    await c.addLineLayer(
+      'triangulo-boundary', 'triangulo-boundary-line',
+      const maplibre.LineLayerProperties(
+        lineColor: _boundaryColorHex,
+        lineWidth: 3.0,
+        lineOpacity: 1.0,
+        lineDasharray: [2.0, 1.5],
+      ),
     );
 
-    void face(List<Offset> pts, Color fill) {
-      final path = Path()..addPolygon(pts, true);
-      canvas.drawPath(path, Paint()..color = fill);
-      canvas.drawPath(path, Paint()
-        ..color = Colors.black.withValues(alpha: 0.25)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1);
-    }
-
-    face([a, b, b2, a2], Color.lerp(color, Colors.black, 0.42)!); // left/front face
-    face([b, c, c2, b2], Color.lerp(color, Colors.black, 0.22)!); // right face
-    face([a2, b2, c2, d2], color);                                 // top face
-
-    // Probability readout floating above the bar.
-    final pct = (probability.clamp(0.0, 1.0) * 100).toStringAsFixed(0);
-    final tp = TextPainter(
-      text: TextSpan(
-        text: '$pct%',
-        style: TextStyle(
-          color: color, fontSize: 12, fontWeight: FontWeight.w800,
-          shadows: const [Shadow(color: Colors.black, blurRadius: 4)],
-        ),
+    // Extruded water slab.
+    await c.addSource('triangulo-water',
+        maplibre.GeojsonSourceProperties(data: _boundaryPolygonGeoJson()));
+    await c.addFillExtrusionLayer(
+      'triangulo-water', 'triangulo-water-fill',
+      maplibre.FillExtrusionLayerProperties(
+        fillExtrusionColor: _waterColorHex,
+        fillExtrusionBase: 0.0,
+        fillExtrusionHeight: _alertWaterHeight[widget.alertKey] ?? 0.0,
+        fillExtrusionOpacity: _alertWaterOpacity[widget.alertKey] ?? 0.0,
       ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    final topCenter = Offset((a2.dx + c2.dx) / 2, (a2.dy + c2.dy) / 2);
-    tp.paint(canvas, topCenter + Offset(-tp.width / 2, -tp.height - 10));
+    );
+
+    if (mounted) setState(() => _styleReady = true);
+  }
+
+  Future<void> _applyAlertState() async {
+    final c = _controller;
+    if (c == null || !_styleReady) return;
+    await c.setLayerProperties(
+      'triangulo-water-fill',
+      maplibre.FillExtrusionLayerProperties(
+        fillExtrusionHeight: _alertWaterHeight[widget.alertKey] ?? 0.0,
+        fillExtrusionOpacity: _alertWaterOpacity[widget.alertKey] ?? 0.0,
+      ),
+    );
   }
 
   @override
-  bool shouldRepaint(covariant _RiskBarPainter oldDelegate) =>
-      oldDelegate.probability != probability ||
-      oldDelegate.color != color ||
-      oldDelegate.phase != phase;
+  void didUpdateWidget(covariant _Maplibre3DMap oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.alertKey != widget.alertKey) _applyAlertState();
+  }
+
+  void _switchStyle(String key) {
+    if (key == _styleKey) return;
+    setState(() {
+      _styleKey = key;
+      _styleReady = false; // new style => layers get re-added on style.load
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final alertColor = _alertColors[widget.alertKey] ?? _alertColors['NORMAL']!;
+
+    return Stack(children: [
+      Positioned.fill(
+        // Keying on style forces a clean remount when switching basemaps,
+        // which re-fires onStyleLoadedCallback so layers get re-added.
+        child: maplibre.MapLibreMap(
+          key: ValueKey('agos_flood_map_3d_$_styleKey'),
+          styleString: _styleUrls[_styleKey]!,
+          initialCameraPosition: const maplibre.CameraPosition(
+            target: maplibre.LatLng(13.6140, 123.1915),
+            zoom: 16.2, tilt: 55, bearing: -17,
+          ),
+          onMapCreated: (c) {
+            _controller = c;
+            widget.onMapCreated(c);
+          },
+          onStyleLoadedCallback: _onStyleLoaded,
+        ),
+      ),
+
+      // ── Floating HUD (alert + probability) ────────────────────────────
+      Positioned(
+        top: 10, left: 10,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          constraints: const BoxConstraints(minWidth: 150),
+          decoration: BoxDecoration(
+            color: AppColors.bgDark.withValues(alpha: 0.9),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: alertColor.withValues(alpha: 0.5)),
+            boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.35), blurRadius: 10)],
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Container(
+              width: 8, height: 8,
+              decoration: BoxDecoration(shape: BoxShape.circle, color: alertColor),
+            ),
+            const SizedBox(width: 7),
+            Text(widget.alertKey, style: TextStyle(
+                color: alertColor, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.6)),
+          ]),
+        ),
+      ),
+
+      // ── Basemap style switcher ─────────────────────────────────────────
+      Positioned(
+        bottom: 10, left: 10,
+        child: Container(
+          decoration: BoxDecoration(
+            color: AppColors.bgDark.withValues(alpha: 0.9),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: AppColors.bgBorder),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Row(mainAxisSize: MainAxisSize.min, children: _styleUrls.keys.map((key) {
+            final selected = key == _styleKey;
+            return GestureDetector(
+              onTap: () => _switchStyle(key),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                color: selected ? AppColors.accent : Colors.transparent,
+                child: Text(_styleLabels[key]!, style: TextStyle(
+                    color: selected ? Colors.white : AppColors.textMuted,
+                    fontSize: 10, fontWeight: FontWeight.w700)),
+              ),
+            );
+          }).toList()),
+        ),
+      ),
+    ]);
+  }
 }
 
 // ── Segmented layer tab ───────────────────────────────────────────────────────
