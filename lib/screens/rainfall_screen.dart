@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../main.dart';
+import '../theme/panahon_ui.dart';
 
 const _modelUrl = 'https://flood-api-553657561163.asia-southeast1.run.app/api/predict-flood';
 
@@ -109,75 +110,76 @@ class _RainfallScreenState extends State<RainfallScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('🌧 RAINFALL', style: TextStyle(
-                color: AppColors.textMuted, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.5)),
-            const SizedBox(height: 2),
-            const Text('PAGASA Rainfall Thresholds · Barangay Triangulo',
-                style: TextStyle(color: AppColors.textMuted, fontSize: 11)),
-            const SizedBox(height: 14),
+            Row(children: [
+              const Icon(Icons.location_on_rounded, color: AppColors.textMuted, size: 13),
+              const SizedBox(width: 3),
+              const Text('PAGASA Rainfall Thresholds · Brgy. Triangulo',
+                  style: TextStyle(color: AppColors.textMuted, fontSize: 11, fontWeight: FontWeight.w600)),
+            ]),
+            const SizedBox(height: 12),
 
-            // ── Current status banner ─────────────────────────────
-            if (_liveRainfall != null && _liveRainfall! > 0)
-              Container(
-                padding: const EdgeInsets.all(14),
-                margin: const EdgeInsets.only(bottom: 16),
-                decoration: BoxDecoration(
-                  color: cat.color.withValues(alpha: 0.08),
-                  border: Border.all(color: cat.color.withValues(alpha: 0.35)),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(_emojiFor(cat.label), style: const TextStyle(fontSize: 26)),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(children: [
-                            Text('${cat.label.toUpperCase()} RAINFALL', style: TextStyle(
-                                color: cat.color, fontWeight: FontWeight.w900, fontSize: 13)),
-                            const SizedBox(width: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: cat.color.withValues(alpha: 0.15),
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(color: cat.color.withValues(alpha: 0.4)),
-                              ),
-                              child: Text('${_liveRainfall!.toStringAsFixed(1)} mm/hr',
-                                  style: TextStyle(color: cat.color, fontSize: 10, fontWeight: FontWeight.w700)),
-                            ),
-                          ]),
-                          const SizedBox(height: 6),
-                          Text(cat.desc, style: const TextStyle(
-                              color: AppColors.textSec, fontSize: 12, height: 1.4)),
-                          const SizedBox(height: 4),
-                          Text(cat.pagasa, style: const TextStyle(
-                              color: AppColors.textMuted, fontSize: 10)),
-                        ],
+            // ── Current status hero card (PANaHON-style) ────────────
+            PanahonHeroCard(
+              accentColor: (_liveRainfall ?? 0) > 0 ? cat.color : AppColors.bgBorder,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      const Text('CURRENT RAINFALL', style: TextStyle(
+                          color: AppColors.textMuted, fontSize: 9.5, fontWeight: FontWeight.w800, letterSpacing: 1.2)),
+                      const SizedBox(height: 6),
+                      Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                        Text(
+                          _liveRainfall != null ? _liveRainfall!.toStringAsFixed(1) : '—',
+                          style: const TextStyle(color: AppColors.textPri, fontSize: 40,
+                              fontWeight: FontWeight.w900, height: 1, letterSpacing: -1),
+                        ),
+                        const Padding(
+                          padding: EdgeInsets.only(bottom: 6, left: 4),
+                          child: Text('mm/hr', style: TextStyle(color: AppColors.textSec, fontSize: 14, fontWeight: FontWeight.w700)),
+                        ),
+                      ]),
+                      const SizedBox(height: 8),
+                      if (_liveRainfall != null && _liveRainfall! > 0) ...[
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: cat.color.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: cat.color.withValues(alpha: 0.4)),
+                          ),
+                          child: Text('${cat.label.toUpperCase()} RAINFALL',
+                              style: TextStyle(color: cat.color, fontWeight: FontWeight.w900, fontSize: 11, letterSpacing: 0.4)),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(cat.desc, style: const TextStyle(color: AppColors.textSec, fontSize: 12, height: 1.4)),
+                        const SizedBox(height: 4),
+                        Text(cat.pagasa, style: const TextStyle(color: AppColors.textMuted, fontSize: 10)),
+                      ] else if (!_loading)
+                        const Text('No significant rainfall detected right now.',
+                            style: TextStyle(color: AppColors.textSec, fontSize: 12)),
+                    ]),
+                  ),
+                  Container(
+                    width: 56, height: 56,
+                    decoration: BoxDecoration(
+                      color: ((_liveRainfall ?? 0) > 0 ? cat.color : AppColors.accent).withValues(alpha: 0.14),
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                          color: ((_liveRainfall ?? 0) > 0 ? cat.color : AppColors.accent).withValues(alpha: 0.4), width: 1.5),
+                    ),
+                    child: Center(
+                      child: Text(
+                        (_liveRainfall ?? 0) > 0 ? _emojiFor(cat.label) : '🌤',
+                        style: const TextStyle(fontSize: 24),
                       ),
                     ),
-                  ],
-                ),
-              )
-            else if (!_loading)
-              Container(
-                padding: const EdgeInsets.all(14),
-                margin: const EdgeInsets.only(bottom: 16),
-                decoration: BoxDecoration(
-                  color: AppColors.bgCard,
-                  border: Border.all(color: AppColors.bgBorder),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Row(children: [
-                  Text('🌤', style: TextStyle(fontSize: 22)),
-                  SizedBox(width: 10),
-                  Expanded(child: Text('No significant rainfall detected right now.',
-                      style: TextStyle(color: AppColors.textSec, fontSize: 12))),
+                  ),
                 ]),
               ),
+            ),
+            const SizedBox(height: 16),
 
             // ── Period toggle ───────────────────────────────────────
             Row(children: [

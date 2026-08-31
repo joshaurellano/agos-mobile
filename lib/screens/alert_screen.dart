@@ -230,13 +230,18 @@ class _AlertScreenState extends State<AlertScreen> {
 
         // ── Header bar ────────────────────────────────────────
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          decoration: const BoxDecoration(
-            color: AppColors.bgCard,
-            border: Border(bottom: BorderSide(color: AppColors.bgBorder)),
-          ),
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
           child: Row(
             children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppColors.accent.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.notifications_rounded, color: AppColors.accent, size: 15),
+              ),
+              const SizedBox(width: 10),
               const Expanded(
                 child: Text(
                   'Notifications',

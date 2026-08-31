@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
+import '../main.dart';
+import '../theme/panahon_ui.dart';
 
 // ─── Evacuation Centers ────────────────────────────────────────────────────────
 class _EvacCenter {
@@ -135,6 +137,47 @@ class _EvacuationScreenState extends State<EvacuationScreen> {
 
   final MapController _mapController = MapController();
   final ScrollController _scrollController = ScrollController();
+  final TextEditingController _searchCtrl = TextEditingController();
+
+  bool _showLegend = false;
+  double _zoom = 14.5;
+  String? _searchError;
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  // ── Search: find an evacuation center by name and fly to it ────────────────
+  void _search(String query) {
+    final q = query.trim().toLowerCase();
+    if (q.isEmpty) return;
+    final match = _centers.where((c) => c.name.toLowerCase().contains(q)).toList();
+    if (match.isEmpty) {
+      setState(() => _searchError = 'No evacuation center matches "$query"');
+      return;
+    }
+    final c = match.first;
+    setState(() {
+      _searchError = null;
+      _selectedCenterId = c.id;
+    });
+    _mapController.move(LatLng(c.lat, c.lng), 16.5);
+    HapticFeedback.selectionClick();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(0,
+            duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+      }
+    });
+  }
+
+  void _zoomBy(double delta) {
+    final target = (_zoom + delta).clamp(12.0, 19.0);
+    setState(() => _zoom = target);
+    _mapController.move(_mapController.camera.center, target);
+  }
 
   // ── Location fetching ──────────────────────────────────────────────────────
   Future<void> _locateUser() async {
@@ -198,7 +241,8 @@ class _EvacuationScreenState extends State<EvacuationScreen> {
       if (nearest != null) {
         final midLat = (pos.latitude + nearest.lat) / 2;
         final midLng = (pos.longitude + nearest.lng) / 2;
-        _mapController.move(LatLng(midLat, midLng), 14.8);
+        _zoom = 14.8;
+        _mapController.move(LatLng(midLat, midLng), _zoom);
       }
 
       // Scroll list to top so the highlighted card is visible
@@ -219,11 +263,9 @@ class _EvacuationScreenState extends State<EvacuationScreen> {
     }
   }
 
-  double get _locateBtnTop {
-    if (_nearest != null && _isInFloodZone != null) return 128;
-    if (_nearest != null || _isInFloodZone != null) return 72;
-    return 12;
-  }
+  // Search bar sits at top=10, height=42 → banners start right below it.
+  static const double _searchBarBottom = 60;
+  double get _bannerTop => _searchBarBottom;
 
   @override
   Widget build(BuildContext context) {
@@ -240,6 +282,7 @@ class _EvacuationScreenState extends State<EvacuationScreen> {
                 initialZoom: 14.5,
                 // Tapping the map clears the selection highlight
                 onTap: (_, __) => setState(() => _selectedCenterId = null),
+                onPositionChanged: (pos, _) => _zoom = pos.zoom,
                 interactionOptions: const InteractionOptions(
                   flags: InteractiveFlag.pinchZoom | InteractiveFlag.drag,
                 ),
@@ -388,10 +431,43 @@ class _EvacuationScreenState extends State<EvacuationScreen> {
               ],
             ),
 
+            // ── Search bar (PANaHON-style) ───────────────────────────────
+            Positioned(
+              top: 10, left: 10, right: 58,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  PanahonSearchBar(
+                    hint: 'Search evacuation center…',
+                    controller: _searchCtrl,
+                    onSubmitted: _search,
+                    trailing: GestureDetector(
+                      onTap: () => _search(_searchCtrl.text),
+                      child: const Icon(Icons.arrow_forward_rounded, size: 16, color: AppColors.accent),
+                    ),
+                  ),
+                  if (_searchError != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6, left: 4),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: AppColors.bgDark.withValues(alpha: 0.95),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: AppColors.red.withValues(alpha: 0.4)),
+                        ),
+                        child: Text(_searchError!,
+                            style: const TextStyle(color: AppColors.red, fontSize: 10.5)),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+
             // ── Nearest center banner ──────────────────────────────────────
             if (_nearest != null && _nearestDist != null)
               Positioned(
-                top: 12, left: 12, right: 60,
+                top: _bannerTop, left: 12, right: 60,
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
                   decoration: BoxDecoration(
@@ -432,7 +508,7 @@ class _EvacuationScreenState extends State<EvacuationScreen> {
             // ── Flood zone banner ──────────────────────────────────────────
             if (_isInFloodZone != null)
               Positioned(
-                top: _nearest != null ? 72 : 12,
+                top: _nearest != null ? _bannerTop + 60 : _bannerTop,
                 left: 12,
                 right: 60,
                 child: AnimatedContainer(
@@ -467,91 +543,91 @@ class _EvacuationScreenState extends State<EvacuationScreen> {
                 ),
               ),
 
-            // ── Legend (no location yet) ───────────────────────────────────
-            if (_nearest == null && _isInFloodZone == null)
+            // ── Legend panel (toggled via the layers icon below) ────────────
+            if (_showLegend)
               Positioned(
-                top: 12, left: 12,
+                top: 56, right: 56,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  width: 170,
+                  padding: const EdgeInsets.all(11),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF0d1f3c).withValues(alpha: 0.92),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: const Color(0xFF1e3a5f)),
+                    color: AppColors.bgDark.withValues(alpha: 0.96),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: AppColors.bgBorder),
+                    boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.4), blurRadius: 10)],
                   ),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    const Text('MAP LEGEND',
+                        style: TextStyle(color: AppColors.textMuted, fontSize: 9,
+                            fontWeight: FontWeight.w800, letterSpacing: 1)),
+                    const SizedBox(height: 8),
                     Row(children: [
                       Container(width: 10, height: 10,
                           decoration: const BoxDecoration(color: Color(0xFFDC143C), shape: BoxShape.circle)),
-                      const SizedBox(width: 6),
-                      const Text('Evacuation Centers',
-                          style: TextStyle(color: Color(0xFF8da4be), fontSize: 9.5)),
+                      const SizedBox(width: 7),
+                      const Expanded(child: Text('Evacuation Center',
+                          style: TextStyle(color: AppColors.textSec, fontSize: 10.5))),
                     ]),
-                    const SizedBox(height: 5),
+                    const SizedBox(height: 6),
+                    Row(children: [
+                      Container(width: 10, height: 10,
+                          decoration: const BoxDecoration(color: Color(0xFF22C55E), shape: BoxShape.circle)),
+                      const SizedBox(width: 7),
+                      const Expanded(child: Text('Nearest / You',
+                          style: TextStyle(color: AppColors.textSec, fontSize: 10.5))),
+                    ]),
+                    const SizedBox(height: 6),
                     Row(children: [
                       Container(
                           width: 18, height: 2,
                           decoration: BoxDecoration(
-                            color: const Color(0xFF38bdf8).withValues(alpha: 0.7),
+                            color: AppColors.accent.withValues(alpha: 0.7),
                             borderRadius: BorderRadius.circular(1),
                           )),
-                      const SizedBox(width: 6),
-                      const Text('Brgy. Boundary',
-                          style: TextStyle(color: Color(0xFF8da4be), fontSize: 9.5)),
+                      const SizedBox(width: 7),
+                      const Expanded(child: Text('Brgy. Boundary',
+                          style: TextStyle(color: AppColors.textSec, fontSize: 10.5))),
+                    ]),
+                    const SizedBox(height: 6),
+                    Row(children: [
+                      Container(
+                          width: 18, height: 2,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF22C55E),
+                            borderRadius: BorderRadius.circular(1),
+                          )),
+                      const SizedBox(width: 7),
+                      const Expanded(child: Text('Route to Center',
+                          style: TextStyle(color: AppColors.textSec, fontSize: 10.5))),
                     ]),
                   ]),
                 ),
               ),
 
-            // ── Locate Me button ───────────────────────────────────────────
+            // ── Vertical map tool stack (PANaHON-style) ──────────────────────
             Positioned(
-              top: _locateBtnTop,
-              right: 12,
-              child: Column(children: [
-                GestureDetector(
-                  onTap: _locating ? null : _locateUser,
-                  child: Container(
-                    width: 42, height: 42,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0d1f3c),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: _userLocation != null
-                            ? const Color(0xFF22C55E).withValues(alpha: 0.6)
-                            : const Color(0xFF1e3a5f),
-                      ),
-                      boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 6)],
-                    ),
-                    child: _locating
-                        ? const Center(
-                            child: SizedBox(
-                              width: 18, height: 18,
-                              child: CircularProgressIndicator(color: Color(0xFF38bdf8), strokeWidth: 2),
-                            ),
-                          )
-                        : Icon(
-                            _userLocation != null
-                                ? Icons.my_location_rounded
-                                : Icons.location_searching_rounded,
-                            color: _userLocation != null
-                                ? const Color(0xFF22C55E)
-                                : const Color(0xFF8da4be),
-                            size: 20,
-                          ),
-                  ),
+              top: 56,
+              right: 10,
+              child: MapToolStack(children: [
+                MapToolButton(
+                  icon: Icons.layers_rounded,
+                  active: _showLegend,
+                  onTap: () => setState(() => _showLegend = !_showLegend),
                 ),
-                if (_userLocation != null) ...[
-                  const SizedBox(height: 4),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0d1f3c),
-                      borderRadius: BorderRadius.circular(4),
-                      border: Border.all(color: const Color(0xFF1e3a5f)),
-                    ),
-                    child: const Text('Live',
-                        style: TextStyle(color: Color(0xFF22C55E), fontSize: 7, fontWeight: FontWeight.w700)),
-                  ),
-                ],
+                MapToolButton(
+                  icon: _userLocation != null ? Icons.my_location_rounded : Icons.location_searching_rounded,
+                  active: _userLocation != null,
+                  activeColor: const Color(0xFF22C55E),
+                  onTap: _locating ? null : _locateUser,
+                  child: _locating
+                      ? const SizedBox(
+                          width: 16, height: 16,
+                          child: CircularProgressIndicator(color: AppColors.accent, strokeWidth: 2),
+                        )
+                      : null,
+                ),
+                MapToolButton(icon: Icons.add_rounded, onTap: () => _zoomBy(1)),
+                MapToolButton(icon: Icons.remove_rounded, onTap: () => _zoomBy(-1)),
               ]),
             ),
 

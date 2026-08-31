@@ -3,19 +3,37 @@ import 'package:provider/provider.dart';
 import '../main.dart';
 import '../models/alert_level.dart';
 import '../services/auth_service.dart';
+import '../theme/panahon_ui.dart';
 import 'dashboard_screen.dart';
 import 'alert_screen.dart';
 import 'evacuation_screen.dart';
 import 'rainfall_screen.dart';
+import 'flood_map_screen.dart';
 
 class MainShell extends StatefulWidget {
-  // initialTabIndex lets a notification tap open directly on Alerts (index 2)
   final int initialTabIndex;
-  const MainShell({super.key, this.initialTabIndex = 0});
+  // Lets a notification tap (see main.dart's '/alert' route) open straight
+  // into the Alerts screen, which now lives behind the bell icon rather
+  // than as its own bottom-nav tab.
+  final bool openAlertsOnStart;
+  const MainShell({super.key, this.initialTabIndex = 0, this.openAlertsOnStart = false});
 
   @override
   State<MainShell> createState() => _MainShellState();
 }
+
+class _TabMeta {
+  final String title;
+  final String tagline;
+  const _TabMeta(this.title, this.tagline);
+}
+
+const _tabMeta = [
+  _TabMeta('AGOS', 'Brgy. Triangulo · Flood Forecast'),
+  _TabMeta('Flood Map', 'Brgy. Triangulo · Zones & Radar'),
+  _TabMeta('Rainfall', 'Brgy. Triangulo · Rain Monitor'),
+  _TabMeta('Evacuation', 'Brgy. Triangulo · Evacuation Map'),
+];
 
 class _MainShellState extends State<MainShell> {
   late int _currentIndex;
@@ -25,6 +43,15 @@ class _MainShellState extends State<MainShell> {
   void initState() {
     super.initState();
     _currentIndex = widget.initialTabIndex;
+    if (widget.openAlertsOnStart) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _openAlerts());
+    }
+  }
+
+  void _openAlerts() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const AlertScreen()),
+    );
   }
 
   void _onAlertChanged(AlertLevelType level) {
@@ -56,8 +83,8 @@ class _MainShellState extends State<MainShell> {
               width: 64, height: 64,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: AppColors.accent.withOpacity(0.15),
-                border: Border.all(color: AppColors.accent.withOpacity(0.4), width: 2),
+                color: AppColors.accent.withValues(alpha: 0.15),
+                border: Border.all(color: AppColors.accent.withValues(alpha: 0.4), width: 2),
               ),
               child: const Icon(Icons.person_rounded, color: AppColors.accent, size: 32),
             ),
@@ -75,9 +102,9 @@ class _MainShellState extends State<MainShell> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
               decoration: BoxDecoration(
-                color: AppColors.accent.withOpacity(0.12),
+                color: AppColors.accent.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: AppColors.accent.withOpacity(0.3)),
+                border: Border.all(color: AppColors.accent.withValues(alpha: 0.3)),
               ),
               child: Text(
                 user?.roleDesc ?? 'Resident',
@@ -114,131 +141,91 @@ class _MainShellState extends State<MainShell> {
   @override
   Widget build(BuildContext context) {
     final alertInfo = AlertLevel.levels[_alertLevel]!;
+    final meta = _tabMeta[_currentIndex];
 
     final screens = [
-      DashboardScreen(onAlertChanged: _onAlertChanged),
+      DashboardScreen(
+        onAlertChanged: _onAlertChanged,
+        onNavigate: (i) => setState(() => _currentIndex = i),
+        onOpenAlerts: _openAlerts,
+      ),
+      const FloodMapScreen(),
       const RainfallScreen(),
-      const AlertScreen(),
       const EvacuationScreen(),
     ];
 
     return Scaffold(
       backgroundColor: AppColors.bgDeep,
-      appBar: AppBar(
-        backgroundColor: AppColors.bgCard,
-        elevation: 0,
-        titleSpacing: 0,
-        title: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Row(
-            children: [
-              const Text('🌊', style: TextStyle(fontSize: 20)),
-              const SizedBox(width: 8),
-              const Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    'AGOS',
-                    style: TextStyle(
-                      color: AppColors.accent,
-                      fontWeight: FontWeight.w900,
-                      fontSize: 18,
-                      letterSpacing: -0.5,
-                    ),
-                  ),
-                  Text(
-                    'Brgy. Triangulo · Resident App',
-                    style: TextStyle(color: AppColors.textMuted, fontSize: 10),
-                  ),
-                ],
+      body: Column(
+        children: [
+          PanahonHeader(
+            appName: meta.title,
+            tagline: meta.tagline,
+            height: 96,
+            leading: Container(
+              width: 34, height: 34,
+              decoration: BoxDecoration(
+                color: AppColors.accent.withValues(alpha: 0.16),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppColors.accent.withValues(alpha: 0.4)),
               ),
-              const Spacer(),
-              // Alert level badge
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                decoration: BoxDecoration(
-                  color: alertInfo.color.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: alertInfo.color.withOpacity(0.4)),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 7, height: 7,
-                      decoration: BoxDecoration(shape: BoxShape.circle, color: alertInfo.color),
-                    ),
-                    const SizedBox(width: 5),
-                    Text(
-                      alertInfo.label.toUpperCase(),
-                      style: TextStyle(
-                        color: alertInfo.color, fontSize: 11,
-                        fontWeight: FontWeight.w700, letterSpacing: 0.6,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 10),
-              // Avatar
-              GestureDetector(
-                onTap: _showAccountSheet,
-                child: Container(
-                  width: 34, height: 34,
+              child: const Center(child: Text('🌊', style: TextStyle(fontSize: 16))),
+            ),
+            trailing: Row(
+              children: [
+                // Alert level pill
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
                   decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: AppColors.accent.withOpacity(0.15),
-                    border: Border.all(color: AppColors.accent.withOpacity(0.4)),
+                    color: alertInfo.color.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: alertInfo.color.withValues(alpha: 0.4)),
                   ),
-                  child: const Icon(Icons.person_rounded, color: AppColors.accent, size: 18),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 7, height: 7,
+                        decoration: BoxDecoration(shape: BoxShape.circle, color: alertInfo.color),
+                      ),
+                      const SizedBox(width: 5),
+                      Text(
+                        alertInfo.label.toUpperCase(),
+                        style: TextStyle(
+                          color: alertInfo.color, fontSize: 10,
+                          fontWeight: FontWeight.w700, letterSpacing: 0.5,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+                PanahonHeaderIcon(
+                  icon: Icons.notifications_rounded,
+                  showDot: _alertLevel != AlertLevelType.normal,
+                  dotColor: alertInfo.color,
+                  onTap: _openAlerts,
+                ),
+                PanahonHeaderIcon(
+                  icon: Icons.person_rounded,
+                  onTap: _showAccountSheet,
+                ),
+              ],
+            ),
           ),
-        ),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Container(height: 1, color: AppColors.bgBorder),
-        ),
+          Expanded(
+            child: IndexedStack(index: _currentIndex, children: screens),
+          ),
+        ],
       ),
-      body: IndexedStack(index: _currentIndex, children: screens),
-      bottomNavigationBar: SafeArea(
-        child: Container(
-          decoration: const BoxDecoration(
-            color: AppColors.bgCard,
-            border: Border(top: BorderSide(color: AppColors.bgBorder)),
-          ),
-          child: BottomNavigationBar(
-            currentIndex: _currentIndex,
-            onTap: (i) => setState(() => _currentIndex = i),
-            backgroundColor: AppColors.bgCard,
-            selectedItemColor: AppColors.accent,
-            unselectedItemColor: AppColors.textMuted,
-            type: BottomNavigationBarType.fixed,
-            selectedFontSize: 11,
-            unselectedFontSize: 11,
-            elevation: 0,
-            items: const [
-              BottomNavigationBarItem(
-                icon: Icon(Icons.dashboard_rounded, size: 22),
-                label: 'Dashboard',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.water_drop_rounded, size: 22),
-                label: 'Rainfall',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.notifications_rounded, size: 22),
-                label: 'Alerts',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.map_rounded, size: 22),
-                label: 'Evacuation',
-              ),
-            ],
-          ),
-        ),
+      bottomNavigationBar: PanahonBottomNav(
+        currentIndex: _currentIndex,
+        onTap: (i) => setState(() => _currentIndex = i),
+        items: const [
+          PanahonNavItem(icon: Icons.dashboard_rounded, label: 'Dashboard'),
+          PanahonNavItem(icon: Icons.radar_rounded, label: 'Flood Map'),
+          PanahonNavItem(icon: Icons.water_drop_rounded, label: 'Rainfall'),
+          PanahonNavItem(icon: Icons.directions_run_rounded, label: 'Evacuation'),
+        ],
       ),
     );
   }
