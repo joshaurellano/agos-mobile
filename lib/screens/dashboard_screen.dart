@@ -1,4 +1,15 @@
-import 'dart:async';
+// dashboard_screen.dart
+//
+// Resident-facing home screen for AGOS. Redesigned to read like a plain
+// weather-forecast app first, technical instrument panel a distant second:
+//
+//   1. Hero card       — today's flood outlook, in plain language
+//   2. Quick stat bar   — rainfall now / estimated water level
+//   3. Hourly Forecast — next 48 hours, straight from Open-Meteo
+//   4. Daily Flood Forecast — the model's actual 14-day forward outlook
+//      (previously unused in this screen — GET /api/forecast-flood)
+//   5. Quick actions, the Alert Levels reference table, and the Rain Map
+//      link live further down, for anyone who wants to dig in.
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -7,6 +18,7 @@ import 'package:provider/provider.dart';
 import '../main.dart';
 import '../models/alert_level.dart';
 import '../services/auth_service.dart';
+import '../services/flood_status_service.dart';
 import '../theme/panahon_ui.dart';
 
 // ─── URLs ─────────────────────────────────────────────────────────────────────
@@ -15,6 +27,12 @@ import '../theme/panahon_ui.dart';
 // or misspelled in .env, this throws immediately at first use instead of
 // silently hitting some other backend, which makes misconfiguration obvious
 // right away rather than showing up as "forecast unavailable" in the UI.
+//
+// MODEL_API_URL itself is no longer read here directly — the day/hourly
+// prediction now comes from the shared FloodStatusService (see
+// services/flood_status_service.dart), which polls it once for the whole
+// app instead of this screen and AlertScreen each running their own
+// separate 30-second timer against the same endpoint.
 String _requireEnv(String key) {
   final v = dotenv.env[key];
   if (v == null || v.isEmpty) {
@@ -23,8 +41,6 @@ String _requireEnv(String key) {
   }
   return v;
 }
-
-String get _modelUrl => _requireEnv('MODEL_API_URL');
 
 String get _forecastUrl => _requireEnv('FORECAST_API_URL');
 
@@ -213,24 +229,9 @@ class _DailyFloodForecast {
   double get probabilityPct => (probability * 100).clamp(0, 100).toDouble();
 }
 
-// ─── AlertLevelType extension ─────────────────────────────────────────────────
-extension AlertLevelTypeX on AlertLevelType {
-  AlertLevel get info => AlertLevel.levels[this]!;
-  Color get color => info.color;
-  String get label => info.label;
-
-  IconData get icon {
-    switch (this) {
-      case AlertLevelType.normal:   return Icons.check_circle_outline_rounded;
-      case AlertLevelType.advisory: return Icons.info_outline_rounded;
-      case AlertLevelType.warning:  return Icons.warning_amber_rounded;
-      case AlertLevelType.critical: return Icons.crisis_alert_rounded;
-    }
-  }
-
-  bool get shouldPulse =>
-      this == AlertLevelType.critical || this == AlertLevelType.warning;
-}
+// ─── AlertLevelTypeX ───────────────────────────────────────────────────────
+// Moved to models/alert_level.dart so alert_screen.dart can reuse the same
+// shape-distinct icons without importing this whole screen file.
 
 // ─── Small helpers ────────────────────────────────────────────────────────────
 String _relativeTime(DateTime dt) {
@@ -288,7 +289,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _loading = true;
   bool _error   = false;
   DateTime _lastUpdated = DateTime.now();
-  Timer? _predTimer;
+
+  // Prediction data now comes from the shared FloodStatusService (a single
+  // app-wide poller — see services/flood_status_service.dart) instead of
+  // this screen running its own independent 30-second Timer against the
+  // same endpoint AlertScreen was also polling separately.
+  FloodStatusService? _statusService;
 
   // Hourly (next 48h) — GET /api/forecast
   List<Map<String, dynamic>> _hourly = [];
@@ -302,41 +308,43 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
-    _fetchPrediction();
     _fetchHourly();
     _fetchDailyFlood();
-    _predTimer = Timer.periodic(const Duration(seconds: 30), (_) => _fetchPrediction());
+    // context.read is safe in initState (unlike context.watch).
+    final svc = context.read<FloodStatusService>();
+    _statusService = svc;
+    svc.addListener(_onStatusUpdate);
+    _onStatusUpdate(); // apply whatever the service already has (e.g. cache)
   }
 
   @override
-  void dispose() { _predTimer?.cancel(); super.dispose(); }
+  void dispose() {
+    _statusService?.removeListener(_onStatusUpdate);
+    super.dispose();
+  }
 
-  Future<void> _fetchPrediction() async {
-    var url = '(unresolved)';
-    try {
-      url = _modelUrl;
-      final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 15));
-      if (!mounted) return;
-      if (res.statusCode == 200) {
-        final p = _Prediction.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) setState(() { _pred = p; _loading = false; _error = false; _lastUpdated = DateTime.now(); });
-        });
-        widget.onAlertChanged?.call(_alertFromInt(p.alertLevel));
-      } else { throw Exception('HTTP ${res.statusCode}'); }
-    } catch (e) {
-      debugPrint('AGOS: _fetchPrediction failed ($url): $e');
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) setState(() { _loading = false; _error = true; });
-      });
+  void _onStatusUpdate() {
+    final svc = _statusService;
+    if (svc == null || !mounted) return;
+    final json = svc.rawJson;
+    setState(() {
+      _pred = json != null ? _Prediction.fromJson(json) : null;
+      // _loading only blocks the UI when there's truly nothing to show yet.
+      // _error tracks whether the *most recent* refresh attempt failed —
+      // shown as a banner even when we still have a last-known reading to
+      // display underneath it, same as the original behavior.
+      _loading = svc.loading && json == null;
+      _error = svc.error != null;
+      if (svc.lastUpdated != null) _lastUpdated = svc.lastUpdated!;
+    });
+    if (_pred != null) {
+      widget.onAlertChanged?.call(_alertFromInt(_pred!.alertLevel));
     }
   }
 
   Future<void> _fetchHourly() async {
-    var url = '(unresolved)';
     try {
-      url = _forecastUrl;
-      final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 15));
+      final res = await http.get(Uri.parse(_forecastUrl)).timeout(const Duration(seconds: 15));
       if (!mounted) return;
       if (res.statusCode == 200) {
         final body = jsonDecode(res.body) as Map<String, dynamic>;
@@ -346,9 +354,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
             _hourlyLoading = false;
           });
         });
-      } else { throw Exception('HTTP ${res.statusCode}'); }
-    } catch (e) {
-      debugPrint('AGOS: _fetchHourly failed ($url): $e');
+      } else { throw Exception(); }
+    } catch (_) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) setState(() => _hourlyLoading = false);
       });
@@ -356,10 +363,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _fetchDailyFlood() async {
-    var url = '(unresolved)';
     try {
-      url = _forecastFloodUrl;
-      final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 15));
+      final res = await http.get(Uri.parse(_forecastFloodUrl)).timeout(const Duration(seconds: 15));
       if (!mounted) return;
       if (res.statusCode == 200) {
         final body = jsonDecode(res.body) as Map<String, dynamic>;
@@ -374,9 +379,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         } else {
           throw Exception(body['message']?.toString() ?? 'unknown error');
         }
-      } else { throw Exception('HTTP ${res.statusCode}'); }
-    } catch (e) {
-      debugPrint('AGOS: _fetchDailyFlood failed ($url): $e');
+      } else { throw Exception(); }
+    } catch (_) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) setState(() { _dailyLoading = false; _dailyError = true; });
       });
@@ -384,7 +388,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _refreshAll() => Future.wait([
-    _fetchPrediction(),
+    context.read<FloodStatusService>().refresh(),
     _fetchHourly(),
     _fetchDailyFlood(),
   ]);
@@ -411,7 +415,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (_error) ...[_OfflineBanner(), const SizedBox(height: 12)],
+            if (_error) ...[_OfflineBanner(lastUpdated: _lastUpdated), const SizedBox(height: 12)],
 
             _TopBar(firstName: firstName, onOpenAlerts: widget.onOpenAlerts),
             const SizedBox(height: 10),
@@ -488,6 +492,9 @@ class _SectionLabel extends StatelessWidget {
 }
 
 class _OfflineBanner extends StatelessWidget {
+  final DateTime? lastUpdated;
+  const _OfflineBanner({this.lastUpdated});
+
   @override
   Widget build(BuildContext context) => ClipRRect(
     borderRadius: BorderRadius.circular(6),
@@ -500,13 +507,15 @@ class _OfflineBanner extends StatelessWidget {
             color: const Color(0xFFef4444).withValues(alpha: 0.07),
             border: Border.all(color: const Color(0xFFef4444).withValues(alpha: 0.25)),
           ),
-          child: const Row(children: [
-            Text('⚠', style: TextStyle(color: Color(0xFFf87171), fontSize: 13)),
-            SizedBox(width: 8),
+          child: Row(children: [
+            const Text('⚠', style: TextStyle(color: Color(0xFFf87171), fontSize: 13)),
+            const SizedBox(width: 8),
             Expanded(
               child: Text(
-                "We're having trouble reaching live data. Showing the last known status.",
-                style: TextStyle(color: Color(0xFFf87171), fontSize: 11.5, fontWeight: FontWeight.w500),
+                lastUpdated != null
+                    ? "Can't reach live data right now. Showing the status from ${_relativeTime(lastUpdated!)}."
+                    : "We're having trouble reaching live data. Showing the last known status.",
+                style: const TextStyle(color: Color(0xFFf87171), fontSize: 11.5, fontWeight: FontWeight.w500),
               ),
             ),
           ]),

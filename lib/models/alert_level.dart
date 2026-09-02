@@ -56,3 +56,28 @@ class AlertLevel {
     return AlertLevelType.normal;
   }
 }
+
+// ─── AlertLevelTypeX ────────────────────────────────────────────────────────
+// Lives here (rather than inside dashboard_screen.dart, where it originally
+// was) so any screen can reuse the same shape-distinct icon per alert level
+// without importing another screen file just to get it. Icon shape carries
+// meaning independently of color — important since color alone isn't a
+// reliable cue for colorblind users, and these are the icons used across
+// the dashboard and alert log.
+extension AlertLevelTypeX on AlertLevelType {
+  AlertLevel get info => AlertLevel.levels[this]!;
+  Color get color => info.color;
+  String get label => info.label;
+
+  IconData get icon {
+    switch (this) {
+      case AlertLevelType.normal:   return Icons.check_circle_outline_rounded;
+      case AlertLevelType.advisory: return Icons.info_outline_rounded;
+      case AlertLevelType.warning:  return Icons.warning_amber_rounded;
+      case AlertLevelType.critical: return Icons.crisis_alert_rounded;
+    }
+  }
+
+  bool get shouldPulse =>
+      this == AlertLevelType.critical || this == AlertLevelType.warning;
+}

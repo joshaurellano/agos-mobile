@@ -7,6 +7,7 @@ import 'package:firebase_core/firebase_core.dart';
 
 import './firebase_options.dart';
 import 'services/auth_service.dart';
+import 'services/flood_status_service.dart';
 import 'services/notification_service.dart';
 import 'screens/login_screen.dart';
 import 'screens/main_shell.dart';
@@ -31,8 +32,16 @@ Future<void> main() async {
   await NotificationService.instance.subscribeToAlerts();
 
   runApp(
-    ChangeNotifierProvider(
-      create: (_) => AuthService(),
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => AuthService()),
+        // Single shared poller for /predict-flood — DashboardScreen and
+        // AlertScreen both read from this instead of each running their
+        // own independent timer against the same endpoint. Starts once,
+        // here, so it's already running (and loading any cached last-known
+        // reading) before either screen even mounts.
+        ChangeNotifierProvider(create: (_) => FloodStatusService()..start()),
+      ],
       child: const AgosApp(),
     ),
   );

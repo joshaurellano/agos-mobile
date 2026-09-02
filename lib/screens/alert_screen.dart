@@ -1,12 +1,11 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
+import 'package:provider/provider.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../main.dart';
 import '../models/alert_level.dart';
 import '../services/auth_service.dart';
-import 'package:provider/provider.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import '../services/flood_status_service.dart';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -48,12 +47,16 @@ const _typeColors = {
   _AlertType.info:     AppColors.accent,
 };
 
+// Shape-distinct icons, not just color — matches the set already used on
+// the dashboard (see AlertLevelTypeX in models/alert_level.dart) so the
+// same alert level always looks the same across screens, and so the level
+// is legible even without relying on color alone.
 const _typeIcons = {
-  _AlertType.critical: '🔴',
-  _AlertType.warning:  '🟠',
-  _AlertType.advisory: '🟡',
-  _AlertType.normal:   '🟢',
-  _AlertType.info:     '🔵',
+  _AlertType.critical: Icons.crisis_alert_rounded,
+  _AlertType.warning:  Icons.warning_amber_rounded,
+  _AlertType.advisory: Icons.info_outline_rounded,
+  _AlertType.normal:   Icons.check_circle_outline_rounded,
+  _AlertType.info:     Icons.campaign_rounded,
 };
 
 const _typeLabels = {
@@ -63,10 +66,6 @@ const _typeLabels = {
   _AlertType.normal:   'NORMAL',
   _AlertType.info:     'INFO',
 };
-
-// ── Model URL ──────────────────────────────────────────────────────────────────
-
-const _modelUrl = 'https://flood-api-553657561163.asia-southeast1.run.app/api/predict-flood';
 
 // ── Screen ─────────────────────────────────────────────────────────────────────
 
@@ -81,8 +80,14 @@ class _AlertScreenState extends State<AlertScreen> {
   final List<_AlertLog> _logs = [];
   String _filter = 'ALL';
   String? _lastInjectedStatus;
-  Timer? _pollTimer;
   bool _loading = true;
+
+  // Model predictions now come from the shared FloodStatusService (a
+  // single app-wide poller — see services/flood_status_service.dart)
+  // instead of this screen running its own independent 30-second Timer
+  // against a URL that, before this change, had drifted to a hardcoded
+  // address different from every other screen's.
+  FloodStatusService? _statusService;
 
   // Supabase realtime channel
   RealtimeChannel? _channel;
@@ -91,14 +96,16 @@ class _AlertScreenState extends State<AlertScreen> {
   void initState() {
     super.initState();
     _fetchAlertsFromDb();
-    _pollModel();
-    _pollTimer = Timer.periodic(const Duration(seconds: 30), (_) => _pollModel());
+    final svc = context.read<FloodStatusService>();
+    _statusService = svc;
+    svc.addListener(_onStatusUpdate);
+    _onStatusUpdate(); // apply whatever the service already has
     _subscribeRealtime();
   }
 
   @override
   void dispose() {
-    _pollTimer?.cancel();
+    _statusService?.removeListener(_onStatusUpdate);
     _channel?.unsubscribe();
     super.dispose();
   }
@@ -139,41 +146,38 @@ class _AlertScreenState extends State<AlertScreen> {
     }
   }
 
-  Future<void> _pollModel() async {
-    try {
-      final res = await http
-          .get(Uri.parse(_modelUrl))
-          .timeout(const Duration(seconds: 15));
+  void _onStatusUpdate() {
+    final svc = _statusService;
+    if (svc == null || !mounted) return;
+    final body = svc.rawJson;
+    if (body == null) return;
+    _injectFromJson(body);
+  }
 
-      if (!mounted || res.statusCode != 200) return;
+  void _injectFromJson(Map<String, dynamic> body) {
+    final alertKey  = body['alert_level'] as String? ?? 'NORMAL';
+    final status    = body['status'] as String? ?? '';
+    final prob      = ((body['probability'] as num?)?.toDouble() ?? 0) * 100;
+    final metrics   = body['live_metrics'] as Map<String, dynamic>? ?? {};
+    final rainfall  = (metrics['rainfall_mm'] as num?)?.toDouble() ?? 0.0;
+    final signal    = (metrics['wind_signal'] as num?)?.toInt() ?? 0;
 
-      final body = jsonDecode(res.body) as Map<String, dynamic>;
-      final alertKey  = body['alert_level'] as String? ?? 'NORMAL';
-      final status    = body['status'] as String? ?? '';
-      final prob      = ((body['probability'] as num?)?.toDouble() ?? 0) * 100;
-      final metrics   = body['live_metrics'] as Map<String, dynamic>? ?? {};
-      final rainfall  = (metrics['rainfall_mm'] as num?)?.toDouble() ?? 0.0;
-      final signal    = (metrics['wind_signal'] as num?)?.toInt() ?? 0;
+    // Only inject a new log entry when alert changes (skip NORMAL to reduce noise)
+    if (alertKey == 'NORMAL') return;
+    if (_lastInjectedStatus == status) return;
+    _lastInjectedStatus = status;
 
-      // Only inject a new log entry when alert changes (skip NORMAL to reduce noise)
-      if (alertKey == 'NORMAL') return;
-      if (_lastInjectedStatus == status) return;
-      _lastInjectedStatus = status;
+    final newLog = _AlertLog(
+      id:      DateTime.now().millisecondsSinceEpoch,
+      time:    _formatTime(DateTime.now()),
+      type:    _typeFromKey(alertKey),
+      message: '[AI Model] $status — Flood probability: ${prob.toStringAsFixed(1)}%. '
+               'Rainfall: ${rainfall.toStringAsFixed(1)}mm, Signal #$signal.',
+      sentBy:  'LSTM Model (Auto)',
+      read:    false,
+    );
 
-      final newLog = _AlertLog(
-        id:      DateTime.now().millisecondsSinceEpoch,
-        time:    _formatTime(DateTime.now()),
-        type:    _typeFromKey(alertKey),
-        message: '[AI Model] $status — Flood probability: ${prob.toStringAsFixed(1)}%. '
-                 'Rainfall: ${rainfall.toStringAsFixed(1)}mm, Signal #$signal.',
-        sentBy:  'LSTM Model (Auto)',
-        read:    false,
-      );
-
-      setState(() => _logs.insert(0, newLog));
-    } catch (_) {
-      // silent fail — model may be temporarily unreachable
-    }
+    if (mounted) setState(() => _logs.insert(0, newLog));
   }
 
   void _subscribeRealtime() {
@@ -439,7 +443,7 @@ class _AlertCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = _typeColors[log.type] ?? AppColors.accent;
-    final icon  = _typeIcons[log.type]  ?? '🔵';
+    final icon  = _typeIcons[log.type]  ?? Icons.campaign_rounded;
     final label = _typeLabels[log.type] ?? 'INFO';
 
     return GestureDetector(
@@ -465,7 +469,7 @@ class _AlertCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(children: [
-                  Text(icon, style: const TextStyle(fontSize: 14, decoration: TextDecoration.none)),
+                  Icon(icon, color: color, size: 15),
                   const SizedBox(width: 6),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),

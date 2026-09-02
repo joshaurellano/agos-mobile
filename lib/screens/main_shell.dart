@@ -114,6 +114,18 @@ class _MainShellState extends State<MainShell> {
                 ),
               ),
             ),
+            if (context.watch<AuthService>().isOffline) ...[
+              const SizedBox(height: 10),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: const [
+                  Icon(Icons.cloud_off_rounded, color: AppColors.textMuted, size: 13),
+                  SizedBox(width: 5),
+                  Text('Offline — showing your saved profile',
+                      style: TextStyle(color: AppColors.textMuted, fontSize: 11)),
+                ],
+              ),
+            ],
             const SizedBox(height: 28),
             SizedBox(
               width: double.infinity,
