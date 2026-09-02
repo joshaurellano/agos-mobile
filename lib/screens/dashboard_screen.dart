@@ -19,6 +19,7 @@ import '../main.dart';
 import '../models/alert_level.dart';
 import '../services/auth_service.dart';
 import '../services/flood_status_service.dart';
+import '../services/model_api_client.dart';
 import '../theme/panahon_ui.dart';
 
 // ─── URLs ─────────────────────────────────────────────────────────────────────
@@ -364,7 +365,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _fetchDailyFlood() async {
     try {
-      final res = await http.get(Uri.parse(_forecastFloodUrl)).timeout(const Duration(seconds: 15));
+      final res = await getWithFallback(_forecastFloodUrl);
       if (!mounted) return;
       if (res.statusCode == 200) {
         final body = jsonDecode(res.body) as Map<String, dynamic>;

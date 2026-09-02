@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import '../main.dart';
 import '../theme/panahon_ui.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import '../services/model_api_client.dart';
 
 
 String _requireEnv(String key) {
@@ -86,7 +87,7 @@ class _RainfallScreenState extends State<RainfallScreen> {
 
 Future<void> _fetchRainfall() async {
   try {
-    final res = await http.get(Uri.parse(_modelUrl)).timeout(const Duration(seconds: 15));
+    final res = await getWithFallback(_modelUrl);
     if (!mounted) return;
     debugPrint('RAINFALL STATUS: ${res.statusCode}');
     debugPrint('RAINFALL BODY: ${res.body}');   // <-- add this

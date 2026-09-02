@@ -26,6 +26,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'model_api_client.dart';
 
 String _requireEnv(String key) {
   final v = dotenv.env[key];
@@ -109,8 +110,7 @@ class FloodStatusService extends ChangeNotifier {
   /// background timer.
   Future<void> refresh() async {
     try {
-      final res =
-          await http.get(Uri.parse(_url)).timeout(const Duration(seconds: 15));
+      final res = await getWithFallback(_url);
       if (res.statusCode != 200) throw Exception('HTTP ${res.statusCode}');
       final body = jsonDecode(res.body) as Map<String, dynamic>;
       final now = DateTime.now();

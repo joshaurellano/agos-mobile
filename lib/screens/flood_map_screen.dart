@@ -7,8 +7,11 @@ import 'package:latlong2/latlong.dart' hide Path;
 import 'package:http/http.dart' as http;
 import '../main.dart';
 import '../theme/panahon_ui.dart';
+import '../services/model_api_client.dart';
 
-// ─── URL (no fallback — see dashboard_screen.dart for rationale) ──────────────
+// ─── URL (no fallback for a missing/misspelled .env key — see
+// dashboard_screen.dart for that rationale; a network-level fallback to the
+// backup deployment is still applied at the fetch call site below) ─────────
 String _requireEnv(String key) {
   final v = dotenv.env[key];
   if (v == null || v.isEmpty) {
@@ -164,7 +167,7 @@ class _FloodMapScreenState extends State<FloodMapScreen> {
     var url = '(unresolved)';
     try {
       url = _modelUrl;
-      final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 15));
+      final res = await getWithFallback(url);
       if (!mounted) return;
       if (res.statusCode == 200) {
         final j = jsonDecode(res.body) as Map<String, dynamic>;
