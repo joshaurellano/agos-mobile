@@ -219,6 +219,42 @@ class _AlertScreenState extends State<AlertScreen> {
     }
   });
 
+  Future<void> _confirmClearAll() async {
+    if (_logs.isEmpty) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.bgMid,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text(
+          'Clear all alerts?',
+          style: TextStyle(color: AppColors.textPri, fontWeight: FontWeight.w700, decoration: TextDecoration.none),
+        ),
+        content: const Text(
+          'This removes every alert from this list. It only clears your local view — records already saved in the database are not deleted.',
+          style: TextStyle(color: AppColors.textMuted, fontSize: 13, height: 1.4, decoration: TextDecoration.none),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: AppColors.textMuted, decoration: TextDecoration.none)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Clear all', style: TextStyle(color: AppColors.red, fontWeight: FontWeight.w700, decoration: TextDecoration.none)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      setState(() {
+        _logs.clear();
+        _lastInjectedStatus = null;
+      });
+    }
+  }
+
   // ── Build ────────────────────────────────────────────────────────────────────
 
   @override
@@ -229,7 +265,9 @@ class _AlertScreenState extends State<AlertScreen> {
       children: [
 
         // ── Header bar ────────────────────────────────────────
-        Container(
+        SafeArea(
+          bottom: false,
+          child: Container(
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
           child: Row(
             children: [
@@ -245,7 +283,12 @@ class _AlertScreenState extends State<AlertScreen> {
               const Expanded(
                 child: Text(
                   'Notifications',
-                  style: TextStyle(color: AppColors.textPri, fontWeight: FontWeight.w800, fontSize: 16),
+                  style: TextStyle(
+                    color: AppColors.textPri,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 16,
+                    decoration: TextDecoration.none,
+                  ),
                 ),
               ),
               if (_unreadCount > 0) ...[
@@ -258,7 +301,12 @@ class _AlertScreenState extends State<AlertScreen> {
                   ),
                   child: Text(
                     '$_unreadCount unread',
-                    style: const TextStyle(color: AppColors.accent, fontSize: 11, fontWeight: FontWeight.w700),
+                    style: const TextStyle(
+                      color: AppColors.accent,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      decoration: TextDecoration.none,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -268,10 +316,31 @@ class _AlertScreenState extends State<AlertScreen> {
                   onTap: _markAllRead,
                   child: const Text(
                     'Mark all read',
-                    style: TextStyle(color: AppColors.accent, fontSize: 12, fontWeight: FontWeight.w600),
+                    style: TextStyle(
+                      color: AppColors.accent,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      decoration: TextDecoration.none,
+                    ),
                   ),
                 ),
+              if (_logs.isNotEmpty) ...[
+                const SizedBox(width: 12),
+                GestureDetector(
+                  onTap: _confirmClearAll,
+                  child: const Text(
+                    'Clear all',
+                    style: TextStyle(
+                      color: AppColors.red,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      decoration: TextDecoration.none,
+                    ),
+                  ),
+                ),
+              ],
             ],
+          ),
           ),
         ),
 
@@ -355,6 +424,7 @@ class _FilterChip extends StatelessWidget {
           color: active ? _color : AppColors.textMuted,
           fontSize: 11,
           fontWeight: active ? FontWeight.w700 : FontWeight.w400,
+          decoration: TextDecoration.none,
         ),
       ),
     ),
@@ -395,7 +465,7 @@ class _AlertCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(children: [
-                  Text(icon, style: const TextStyle(fontSize: 14)),
+                  Text(icon, style: const TextStyle(fontSize: 14, decoration: TextDecoration.none)),
                   const SizedBox(width: 6),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
@@ -405,7 +475,13 @@ class _AlertCard extends StatelessWidget {
                     ),
                     child: Text(
                       label,
-                      style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 0.5),
+                      style: TextStyle(
+                        color: color,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.5,
+                        decoration: TextDecoration.none,
+                      ),
                     ),
                   ),
                   const Spacer(),
@@ -415,17 +491,25 @@ class _AlertCard extends StatelessWidget {
                       decoration: BoxDecoration(shape: BoxShape.circle, color: color),
                     ),
                   const SizedBox(width: 6),
-                  Text(log.time, style: const TextStyle(color: AppColors.textMuted, fontSize: 11)),
+                  Text(
+                    log.time,
+                    style: const TextStyle(color: AppColors.textMuted, fontSize: 11, decoration: TextDecoration.none),
+                  ),
                 ]),
                 const SizedBox(height: 8),
                 Text(
                   log.message,
-                  style: const TextStyle(color: AppColors.textPri, fontSize: 13, height: 1.45),
+                  style: const TextStyle(
+                    color: AppColors.textPri,
+                    fontSize: 13,
+                    height: 1.45,
+                    decoration: TextDecoration.none,
+                  ),
                 ),
                 const SizedBox(height: 6),
                 Text(
                   'Sent by: ${log.sentBy}',
-                  style: const TextStyle(color: AppColors.textMuted, fontSize: 11),
+                  style: const TextStyle(color: AppColors.textMuted, fontSize: 11, decoration: TextDecoration.none),
                 ),
               ],
             ),
@@ -445,16 +529,21 @@ class _EmptyState extends StatelessWidget {
     child: Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Text('🔔', style: TextStyle(fontSize: 40, color: AppColors.textMuted)),
+        const Text('🔔', style: TextStyle(fontSize: 40, color: AppColors.textMuted, decoration: TextDecoration.none)),
         const SizedBox(height: 12),
         Text(
           filter == 'ALL' ? 'No alerts yet' : 'No $filter alerts',
-          style: const TextStyle(color: AppColors.textPri, fontWeight: FontWeight.w700, fontSize: 15),
+          style: const TextStyle(
+            color: AppColors.textPri,
+            fontWeight: FontWeight.w700,
+            fontSize: 15,
+            decoration: TextDecoration.none,
+          ),
         ),
         const SizedBox(height: 4),
         const Text(
           'You\'ll be notified when the system\ndetects a change in flood risk.',
-          style: TextStyle(color: AppColors.textMuted, fontSize: 12, height: 1.5),
+          style: TextStyle(color: AppColors.textMuted, fontSize: 12, height: 1.5, decoration: TextDecoration.none),
           textAlign: TextAlign.center,
         ),
       ],

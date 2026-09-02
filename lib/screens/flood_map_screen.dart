@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart' hide Path;
-import 'package:maplibre_gl/maplibre_gl.dart' as maplibre;
 import 'package:http/http.dart' as http;
 import '../main.dart';
 import '../theme/panahon_ui.dart';
@@ -29,29 +28,7 @@ const _alertColors = {
   'CRITICAL': Color(0xFFef4444),
 };
 
-// Hex strings for the same palette, since maplibre layer properties want
-// CSS-style color strings rather than Flutter Colors.
-const _alertColorsHex = {
-  'NORMAL':   '#22c55e',
-  'ADVISORY': '#eab308',
-  'WARNING':  '#f97316',
-  'CRITICAL': '#ef4444',
-};
-
 const _alertLevelKeys = ['NORMAL', 'ADVISORY', 'WARNING', 'CRITICAL'];
-
-// Extruded water-slab height (meters, stylized) / opacity per alert level —
-// mirrors ALERT_WATER in the web FloodMap3D.jsx so both platforms read the
-// same severity language.
-const _alertWaterHeight = {
-  'NORMAL': 0.0, 'ADVISORY': 0.0, 'WARNING': 3.2, 'CRITICAL': 5.5,
-};
-const _alertWaterOpacity = {
-  'NORMAL': 0.0, 'ADVISORY': 0.0, 'WARNING': 0.42, 'CRITICAL': 0.55,
-};
-
-const _waterColorHex = '#1e88e5';
-const _boundaryColorHex = '#38bdf8';
 
 String _alertKeyFromInt(int level) {
   switch (level) {
@@ -62,13 +39,58 @@ String _alertKeyFromInt(int level) {
   }
 }
 
-// OpenFreeMap's free, no-key vector styles — same three used on web.
-const _styleUrls = {
-  'liberty':  'https://tiles.openfreemap.org/styles/liberty',
-  'bright':   'https://tiles.openfreemap.org/styles/bright',
-  'positron': 'https://tiles.openfreemap.org/styles/positron',
+// ─── Basemap options ──────────────────────────────────────────────────────────
+// Free, no-API-key raster sources. `monochrome` controls whether we apply
+// the app's grayscale filter — that only makes sense for the plain street
+// map; satellite/terrain need their real colors to be legible.
+//
+// NOTE: verify `RichAttributionWidget` / `TextSourceAttribution` / the
+// `subdomains` param against the flutter_map version pinned in pubspec.yaml
+// if this doesn't compile as-is — same caveat this file already carried for
+// third-party map package APIs.
+class _BaseStyleDef {
+  final String label;
+  final IconData icon;
+  final String urlTemplate;
+  final List<String> subdomains;
+  final String attribution;
+  final bool monochrome;
+
+  const _BaseStyleDef({
+    required this.label,
+    required this.icon,
+    required this.urlTemplate,
+    this.subdomains = const [],
+    required this.attribution,
+    required this.monochrome,
+  });
+}
+
+const _baseStyles = {
+  'standard': _BaseStyleDef(
+    label: 'Standard',
+    icon: Icons.map_rounded,
+    urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '© OpenStreetMap contributors',
+    monochrome: true,
+  ),
+  'satellite': _BaseStyleDef(
+    label: 'Satellite',
+    icon: Icons.satellite_alt_rounded,
+    urlTemplate:
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    attribution: '© Esri, Maxar, Earthstar Geographics',
+    monochrome: false,
+  ),
+  'terrain': _BaseStyleDef(
+    label: 'Terrain',
+    icon: Icons.terrain_rounded,
+    urlTemplate: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+    subdomains: ['a', 'b', 'c'],
+    attribution: '© OpenTopoMap contributors (CC-BY-SA) · SRTM',
+    monochrome: false,
+  ),
 };
-const _styleLabels = {'liberty': 'Liberty', 'bright': 'Bright', 'positron': 'Positron'};
 
 // ─── Barangay Triangulo boundary ──────────────────────────────────────────────
 const _trianguloPolygon = [
@@ -100,51 +122,6 @@ const _trianguloPolygon = [
 
 const _trianguloCenter = LatLng(13.6140, 123.1915);
 
-// GeoJSON helpers ------------------------------------------------------------
-
-/// Boundary as a closed ring, [lng, lat] order, for fill-extrusion / line
-/// sources (maplibre / GeoJSON always wants lng first).
-List<List<double>> _boundaryRing() {
-  final ring = _trianguloPolygon.map((p) => [p.longitude, p.latitude]).toList();
-  final first = ring.first;
-  final last = ring.last;
-  if (first[0] != last[0] || first[1] != last[1]) ring.add(first);
-  return ring;
-}
-
-// NOTE (fix): maplibre_gl's native Android layer (mbgl::android::geojson::
-// FeatureCollection::convert) always expects the `data` passed to
-// GeojsonSourceProperties to be a FeatureCollection -- i.e. an object with a
-// top-level 'features' array. A bare 'Feature' (no 'features' key) makes the
-// native converter read a null list and call .toArray() on it, which is an
-// unrecoverable JNI abort (SIGABRT) that kills the whole app process before
-// Flutter ever gets a chance to show an error. Both helpers below must
-// always return a FeatureCollection wrapping a single Feature.
-Map<String, dynamic> _boundaryPolygonGeoJson() => {
-  'type': 'FeatureCollection',
-  'features': [
-    {
-      'type': 'Feature',
-      'properties': {},
-      'geometry': {'type': 'Polygon', 'coordinates': [_boundaryRing()]},
-    },
-  ],
-};
-
-Map<String, dynamic> _boundaryLineGeoJson() => {
-  'type': 'FeatureCollection',
-  'features': [
-    {
-      'type': 'Feature',
-      'properties': {},
-      'geometry': {
-        'type': 'LineString',
-        'coordinates': _trianguloPolygon.map((p) => [p.longitude, p.latitude]).toList(),
-      },
-    },
-  ],
-};
-
 // ─── Screen ───────────────────────────────────────────────────────────────────
 class FloodMapScreen extends StatefulWidget {
   const FloodMapScreen({super.key});
@@ -154,21 +131,19 @@ class FloodMapScreen extends StatefulWidget {
 }
 
 class _FloodMapScreenState extends State<FloodMapScreen> {
-  // '2d' = flat interactive flutter_map, '3d' = tilted MapLibre vector map
-  String _layer = '2d';
-
   String _alertKey = 'NORMAL';
   double? _probability;
   bool _loading = true;
   Timer? _timer;
 
+  bool _liveDataStale = false;
+  DateTime? _lastUpdated;
+
   bool _showLegend = false;
+  bool _isFullscreen = false;
+  String _baseStyleKey = 'standard';
   double _zoom = 14.5;
   final MapController _mapController = MapController();
-
-  // Controller for the live 3D map — only valid while _layer == '3d' and the
-  // widget is mounted; every use is guarded accordingly.
-  maplibre.MapLibreMapController? _maplibreController;
 
   @override
   void initState() {
@@ -197,150 +172,182 @@ class _FloodMapScreenState extends State<FloodMapScreen> {
         final prob  = (j['probability'] as num?)?.toDouble();
         if (!mounted) return;
         setState(() {
-          _alertKey    = _alertKeyFromInt(level);
-          _probability = prob;
-          _loading     = false;
+          _alertKey      = _alertKeyFromInt(level);
+          _probability   = prob;
+          _loading       = false;
+          _liveDataStale = false;
+          _lastUpdated   = DateTime.now();
         });
       } else {
         debugPrint('AGOS: _fetchStatus failed ($url): HTTP ${res.statusCode}');
-        if (mounted) setState(() => _loading = false);
+        if (mounted) setState(() { _loading = false; _liveDataStale = true; });
       }
     } catch (e) {
       debugPrint('AGOS: _fetchStatus failed ($url): $e');
-      if (mounted) setState(() => _loading = false);
+      if (mounted) setState(() { _loading = false; _liveDataStale = true; });
     }
   }
 
+  String _timeAgo(DateTime dt) {
+    final diff = DateTime.now().difference(dt);
+    if (diff.inSeconds < 45) return 'just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    return '${diff.inHours}h ago';
+  }
+
+  bool get _canZoomIn => _zoom < 19.0;
+  bool get _canZoomOut => _zoom > 12.0;
+
   void _zoomBy(double delta) {
     if (!mounted) return;
-    if (_layer == '2d') {
-      final target = (_zoom + delta).clamp(12.0, 19.0);
-      setState(() => _zoom = target);
-      try {
-        _mapController.move(_mapController.camera.center, target);
-      } catch (_) {
-        // Map not currently attached — safe to ignore.
-      }
-    } else {
-      _maplibreController?.animateCamera(maplibre.CameraUpdate.zoomBy(delta));
+    final target = (_zoom + delta).clamp(12.0, 19.0);
+    if (target == _zoom) return; // already at limit
+    setState(() => _zoom = target);
+    try {
+      _mapController.move(_mapController.camera.center, target);
+    } catch (_) {
+      // Map not currently attached — safe to ignore.
     }
   }
 
   void _recenter() {
     if (!mounted) return;
-    if (_layer == '2d') {
-      setState(() => _zoom = 14.5);
-      try {
-        _mapController.move(_trianguloCenter, _zoom);
-      } catch (_) {
-        // Map not currently attached — safe to ignore.
-      }
-    } else {
-      _maplibreController?.animateCamera(
-        maplibre.CameraUpdate.newCameraPosition(
-          const maplibre.CameraPosition(
-            target: maplibre.LatLng(13.6140, 123.1915),
-            zoom: 16.2, tilt: 55, bearing: -17,
-          ),
-        ),
-      );
+    setState(() => _zoom = 14.5);
+    try {
+      _mapController.move(_trianguloCenter, _zoom);
+    } catch (_) {
+      // Map not currently attached — safe to ignore.
     }
-  }
-
-  void _selectLayer(String layer) {
-    if (_layer == layer) return;
-    setState(() => _layer = layer);
   }
 
   @override
   Widget build(BuildContext context) {
     final color = _alertColors[_alertKey] ?? _alertColors['NORMAL']!;
+    final activeStyle = _baseStyles[_baseStyleKey]!;
 
-    return Column(
-      children: [
-        // ── Segmented layer toggle ────────────────────────────────────────
-        Padding(
-          padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
-          child: Row(children: [
-            Expanded(
-              child: _LayerTab(
-                icon: Icons.map_rounded,
-                label: '2D Map',
-                selected: _layer == '2d',
-                onTap: () => _selectLayer('2d'),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: _LayerTab(
-                icon: Icons.view_in_ar_rounded,
-                label: '3D View',
-                selected: _layer == '3d',
-                onTap: () => _selectLayer('3d'),
-              ),
-            ),
-          ]),
-        ),
-
-        // ── Map area ───────────────────────────────────────────────────────
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(14),
-              child: Container(
-                decoration: BoxDecoration(
-                  border: Border.all(color: const Color(0xFF1e3a5f)),
+    // Everything is wrapped in one outer SafeArea (top only — the bottom
+    // nav chrome, if any, is handled by whatever hosts this screen) so
+    // fullscreen mode still clears the status bar/notch even with the
+    // header row hidden.
+    return SafeArea(
+      bottom: false,
+      child: Column(
+        children: [
+          if (!_isFullscreen)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+              child: Row(children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: AppColors.accent.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(Icons.map_rounded, color: AppColors.accent, size: 15),
                 ),
-                child: Stack(children: [
-                  Positioned.fill(
-                    child: _layer == '2d'
-                        ? _build2DMap(color)
-                        : _Maplibre3DMap(
-                            alertKey: _alertKey,
-                            onMapCreated: (c) => _maplibreController = c,
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text(
+                    'Flood Map',
+                    style: TextStyle(color: AppColors.textPri, fontWeight: FontWeight.w800, fontSize: 16),
+                  ),
+                ),
+              ]),
+            ),
+
+          // ── Map area ─────────────────────────────────────────────────────
+          Expanded(
+            child: Padding(
+              padding: _isFullscreen ? EdgeInsets.zero : const EdgeInsets.symmetric(horizontal: 14),
+              child: ClipRRect(
+                borderRadius: _isFullscreen ? BorderRadius.zero : BorderRadius.circular(14),
+                child: Container(
+                  decoration: BoxDecoration(
+                    border: _isFullscreen ? null : Border.all(color: const Color(0xFF1e3a5f)),
+                  ),
+                  child: Stack(children: [
+                    Positioned.fill(child: _build2DMap(color, activeStyle)),
+
+                    // ── Status bar ─────────────────────────────────────────
+                    Positioned(top: 10, left: 10, right: 58, child: _statusPill(color)),
+
+                    // ── Legend panel ───────────────────────────────────────
+                    if (_showLegend) Positioned(top: 62, right: 56, child: _legendPanel()),
+
+                    // ── Vertical map tool stack ────────────────────────────
+                    Positioned(
+                      top: 62,
+                      right: 10,
+                      child: MapToolStack(children: [
+                        Tooltip(
+                          message: _isFullscreen ? 'Exit fullscreen' : 'Fullscreen',
+                          child: MapToolButton(
+                            icon: _isFullscreen ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded,
+                            active: _isFullscreen,
+                            onTap: () => setState(() => _isFullscreen = !_isFullscreen),
                           ),
-                  ),
+                        ),
+                        Tooltip(
+                          message: 'Toggle legend',
+                          child: MapToolButton(
+                            icon: Icons.layers_rounded,
+                            active: _showLegend,
+                            onTap: () => setState(() => _showLegend = !_showLegend),
+                          ),
+                        ),
+                        Tooltip(
+                          message: 'Recenter on Barangay Triangulo',
+                          child: MapToolButton(
+                            icon: Icons.center_focus_strong_rounded,
+                            onTap: _recenter,
+                          ),
+                        ),
+                        Tooltip(
+                          message: _canZoomIn ? 'Zoom in' : 'Maximum zoom reached',
+                          child: Opacity(
+                            opacity: _canZoomIn ? 1.0 : 0.4,
+                            child: MapToolButton(
+                              icon: Icons.add_rounded,
+                              onTap: _canZoomIn ? () => _zoomBy(1) : () {},
+                            ),
+                          ),
+                        ),
+                        Tooltip(
+                          message: _canZoomOut ? 'Zoom out' : 'Minimum zoom reached',
+                          child: Opacity(
+                            opacity: _canZoomOut ? 1.0 : 0.4,
+                            child: MapToolButton(
+                              icon: Icons.remove_rounded,
+                              onTap: _canZoomOut ? () => _zoomBy(-1) : () {},
+                            ),
+                          ),
+                        ),
+                      ]),
+                    ),
 
-                  // ── Status bar ─────────────────────────────────────────
-                  Positioned(top: 10, left: 10, right: 58, child: _statusPill(color)),
-
-                  // ── Legend panel ───────────────────────────────────────
-                  if (_showLegend) Positioned(top: 62, right: 56, child: _legendPanel()),
-
-                  // ── Vertical map tool stack ────────────────────────────
-                  Positioned(
-                    top: 62,
-                    right: 10,
-                    child: MapToolStack(children: [
-                      MapToolButton(
-                        icon: Icons.layers_rounded,
-                        active: _showLegend,
-                        onTap: () => setState(() => _showLegend = !_showLegend),
-                      ),
-                      MapToolButton(icon: Icons.my_location_rounded, onTap: _recenter),
-                      MapToolButton(icon: Icons.add_rounded, onTap: () => _zoomBy(1)),
-                      MapToolButton(icon: Icons.remove_rounded, onTap: () => _zoomBy(-1)),
-                    ]),
-                  ),
-
-                  // ── Caption ─────────────────────────────────────────────
-                  Positioned(bottom: 10, left: 10, right: 10, child: _captionBar(_layer == '3d')),
-                ]),
+                    // ── Basemap style switcher ──────────────────────────────
+                    Positioned(bottom: 10, left: 10, child: _styleSwitcher()),
+                  ]),
+                ),
               ),
             ),
           ),
-        ),
-        const SizedBox(height: 14),
-      ],
+
+          if (!_isFullscreen) const SizedBox(height: 14),
+        ],
+      ),
     );
   }
 
-  // ── 2D flat interactive map (unchanged flutter_map layer) ──────────────
-  Widget _build2DMap(Color color) {
+  // ── 2D flat interactive map ──────────────────────────────────────────────
+  Widget _build2DMap(Color color, _BaseStyleDef style) {
     return ColoredBox(
       color: AppColors.bgDark,
       child: FlutterMap(
+        // Kept as one stable key across basemap switches (unlike the old 3D
+        // style switch, which had to fully remount) — swapping `style` just
+        // changes which tiles the same map instance loads, so position/zoom
+        // survive switching between Standard/Satellite/Terrain.
         key: const ValueKey('agos_flood_map_2d'),
         mapController: _mapController,
         options: MapOptions(
@@ -349,20 +356,29 @@ class _FloodMapScreenState extends State<FloodMapScreen> {
           interactionOptions: const InteractionOptions(
             flags: InteractiveFlag.pinchZoom | InteractiveFlag.drag,
           ),
+          onPositionChanged: (position, hasGesture) {
+            final z = position.zoom;
+            if (hasGesture && mounted && z != _zoom) {
+              setState(() => _zoom = z);
+            }
+          },
         ),
         children: [
           TileLayer(
-            urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+            urlTemplate: style.urlTemplate,
+            subdomains: style.subdomains,
             userAgentPackageName: 'com.agos.floodmonitoring',
-            tileBuilder: (context, tileWidget, tile) => ColorFiltered(
-              colorFilter: const ColorFilter.matrix([
-                -0.2126, -0.7152, -0.0722, 0, 255,
-                -0.2126, -0.7152, -0.0722, 0, 255,
-                -0.2126, -0.7152, -0.0722, 0, 255,
-                 0,       0,       0,       1,   0,
-              ]),
-              child: tileWidget,
-            ),
+            tileBuilder: style.monochrome
+                ? (context, tileWidget, tile) => ColorFiltered(
+                      colorFilter: const ColorFilter.matrix([
+                        -0.2126, -0.7152, -0.0722, 0, 255,
+                        -0.2126, -0.7152, -0.0722, 0, 255,
+                        -0.2126, -0.7152, -0.0722, 0, 255,
+                         0,       0,       0,       1,   0,
+                      ]),
+                      child: tileWidget,
+                    )
+                : null,
           ),
           PolygonLayer(polygons: [
             Polygon(
@@ -372,6 +388,10 @@ class _FloodMapScreenState extends State<FloodMapScreen> {
               borderStrokeWidth: 2.0,
             ),
           ]),
+          RichAttributionWidget(
+            alignment: AttributionAlignment.bottomRight,
+            attributions: [TextSourceAttribution(style.attribution)],
+          ),
         ],
       ),
     );
@@ -379,25 +399,33 @@ class _FloodMapScreenState extends State<FloodMapScreen> {
 
   // ── Shared UI pieces ────────────────────────────────────────────────────
   Widget _statusPill(Color color) {
+    final pillColor = _liveDataStale ? AppColors.textMuted : color;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
         color: AppColors.bgDark.withValues(alpha: 0.95),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withValues(alpha: 0.5)),
+        border: Border.all(color: pillColor.withValues(alpha: 0.5)),
         boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.35), blurRadius: 10)],
       ),
       child: Row(children: [
         Container(
           width: 9, height: 9,
-          decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+          decoration: BoxDecoration(shape: BoxShape.circle, color: pillColor),
         ),
         const SizedBox(width: 8),
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('Brgy. Triangulo · $_alertKey', style: TextStyle(
-                color: color, fontSize: 11.5, fontWeight: FontWeight.w800)),
-            if (_probability != null)
+                color: pillColor, fontSize: 11.5, fontWeight: FontWeight.w800)),
+            if (_liveDataStale)
+              Text(
+                _lastUpdated != null
+                    ? 'Live data unavailable · last update ${_timeAgo(_lastUpdated!)}'
+                    : 'Live data unavailable',
+                style: const TextStyle(color: AppColors.textMuted, fontSize: 9.5),
+              )
+            else if (_probability != null)
               Text('${(_probability! * 100).toStringAsFixed(0)}% flood probability',
                   style: const TextStyle(color: AppColors.textMuted, fontSize: 9.5)),
           ]),
@@ -406,7 +434,9 @@ class _FloodMapScreenState extends State<FloodMapScreen> {
           const SizedBox(
             width: 12, height: 12,
             child: CircularProgressIndicator(color: AppColors.accent, strokeWidth: 1.5),
-          ),
+          )
+        else if (_liveDataStale)
+          const Icon(Icons.cloud_off_rounded, color: AppColors.textMuted, size: 14),
       ]),
     );
   }
@@ -450,214 +480,30 @@ class _FloodMapScreenState extends State<FloodMapScreen> {
     );
   }
 
-  Widget _captionBar(bool is3D) {
+  Widget _styleSwitcher() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
       decoration: BoxDecoration(
         color: AppColors.bgDark.withValues(alpha: 0.9),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: AppColors.bgBorder),
       ),
-      child: Text(
-        is3D
-            ? 'Tilted 3D view · flood plane height reflects live probability'
-            : 'Approximate barangay boundary · color-coded by current water code',
-        style: const TextStyle(color: AppColors.textMuted, fontSize: 9.5),
-      ),
-    );
-  }
-}
-
-// ── Real 3D MapLibre view ───────────────────────────────────────────────────
-//
-// Mirrors the web FloodMap3D.jsx: tilted vector basemap (OpenFreeMap,
-// switchable Liberty/Bright/Positron), a dashed boundary outline, and an
-// extruded translucent "water slab" over the barangay polygon whose height
-// and opacity scale with the current alert level.
-//
-// NOTE: `maplibre_gl`'s layer-property classes (FillExtrusionLayerProperties,
-// LineLayerProperties, GeojsonSourceProperties, etc.) are code-generated from
-// the MapLibre style spec and their exact field names can shift slightly
-// between package versions — double check field names against the version
-// pinned in pubspec.yaml (see the package's example app / API docs) if this
-// doesn't compile as-is.
-class _Maplibre3DMap extends StatefulWidget {
-  final String alertKey;
-  final ValueChanged<maplibre.MapLibreMapController> onMapCreated;
-
-  const _Maplibre3DMap({required this.alertKey, required this.onMapCreated});
-
-  @override
-  State<_Maplibre3DMap> createState() => _Maplibre3DMapState();
-}
-
-class _Maplibre3DMapState extends State<_Maplibre3DMap> {
-  maplibre.MapLibreMapController? _controller;
-  String _styleKey = 'liberty';
-  bool _styleReady = false;
-
-  Future<void> _onStyleLoaded() async {
-    final c = _controller;
-    if (c == null) return;
-
-    // Boundary outline.
-    await c.addSource('triangulo-boundary',
-        maplibre.GeojsonSourceProperties(data: _boundaryLineGeoJson()));
-    await c.addLineLayer(
-      'triangulo-boundary', 'triangulo-boundary-line',
-      const maplibre.LineLayerProperties(
-        lineColor: _boundaryColorHex,
-        lineWidth: 3.0,
-        lineOpacity: 1.0,
-        lineDasharray: [2.0, 1.5],
-      ),
-    );
-
-    // Extruded water slab.
-    await c.addSource('triangulo-water',
-        maplibre.GeojsonSourceProperties(data: _boundaryPolygonGeoJson()));
-    await c.addFillExtrusionLayer(
-      'triangulo-water', 'triangulo-water-fill',
-      maplibre.FillExtrusionLayerProperties(
-        fillExtrusionColor: _waterColorHex,
-        fillExtrusionBase: 0.0,
-        fillExtrusionHeight: _alertWaterHeight[widget.alertKey] ?? 0.0,
-        fillExtrusionOpacity: _alertWaterOpacity[widget.alertKey] ?? 0.0,
-      ),
-    );
-
-    if (mounted) setState(() => _styleReady = true);
-  }
-
-  Future<void> _applyAlertState() async {
-    final c = _controller;
-    if (c == null || !_styleReady) return;
-    await c.setLayerProperties(
-      'triangulo-water-fill',
-      maplibre.FillExtrusionLayerProperties(
-        fillExtrusionHeight: _alertWaterHeight[widget.alertKey] ?? 0.0,
-        fillExtrusionOpacity: _alertWaterOpacity[widget.alertKey] ?? 0.0,
-      ),
-    );
-  }
-
-  @override
-  void didUpdateWidget(covariant _Maplibre3DMap oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.alertKey != widget.alertKey) _applyAlertState();
-  }
-
-  void _switchStyle(String key) {
-    if (key == _styleKey) return;
-    setState(() {
-      _styleKey = key;
-      _styleReady = false; // new style => layers get re-added on style.load
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final alertColor = _alertColors[widget.alertKey] ?? _alertColors['NORMAL']!;
-
-    return Stack(children: [
-      Positioned.fill(
-        // Keying on style forces a clean remount when switching basemaps,
-        // which re-fires onStyleLoadedCallback so layers get re-added.
-        child: maplibre.MapLibreMap(
-          key: ValueKey('agos_flood_map_3d_$_styleKey'),
-          styleString: _styleUrls[_styleKey]!,
-          initialCameraPosition: const maplibre.CameraPosition(
-            target: maplibre.LatLng(13.6140, 123.1915),
-            zoom: 16.2, tilt: 55, bearing: -17,
-          ),
-          onMapCreated: (c) {
-            _controller = c;
-            widget.onMapCreated(c);
-          },
-          onStyleLoadedCallback: _onStyleLoaded,
-        ),
-      ),
-
-      // ── Floating HUD (alert + probability) ────────────────────────────
-      Positioned(
-        top: 10, left: 10,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-          constraints: const BoxConstraints(minWidth: 150),
-          decoration: BoxDecoration(
-            color: AppColors.bgDark.withValues(alpha: 0.9),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: alertColor.withValues(alpha: 0.5)),
-            boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.35), blurRadius: 10)],
-          ),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Container(
-              width: 8, height: 8,
-              decoration: BoxDecoration(shape: BoxShape.circle, color: alertColor),
+      clipBehavior: Clip.antiAlias,
+      child: Row(mainAxisSize: MainAxisSize.min, children: _baseStyles.entries.map((entry) {
+        final key = entry.key;
+        final def = entry.value;
+        final selected = key == _baseStyleKey;
+        return Tooltip(
+          message: def.label,
+          child: GestureDetector(
+            onTap: () => setState(() => _baseStyleKey = key),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              color: selected ? AppColors.accent : Colors.transparent,
+              child: Icon(def.icon, size: 15, color: selected ? Colors.white : AppColors.textMuted),
             ),
-            const SizedBox(width: 7),
-            Text(widget.alertKey, style: TextStyle(
-                color: alertColor, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.6)),
-          ]),
-        ),
-      ),
-
-      // ── Basemap style switcher ─────────────────────────────────────────
-      Positioned(
-        bottom: 10, left: 10,
-        child: Container(
-          decoration: BoxDecoration(
-            color: AppColors.bgDark.withValues(alpha: 0.9),
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: AppColors.bgBorder),
           ),
-          clipBehavior: Clip.antiAlias,
-          child: Row(mainAxisSize: MainAxisSize.min, children: _styleUrls.keys.map((key) {
-            final selected = key == _styleKey;
-            return GestureDetector(
-              onTap: () => _switchStyle(key),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                color: selected ? AppColors.accent : Colors.transparent,
-                child: Text(_styleLabels[key]!, style: TextStyle(
-                    color: selected ? Colors.white : AppColors.textMuted,
-                    fontSize: 10, fontWeight: FontWeight.w700)),
-              ),
-            );
-          }).toList()),
-        ),
-      ),
-    ]);
+        );
+      }).toList()),
+    );
   }
-}
-
-// ── Segmented layer tab ───────────────────────────────────────────────────────
-class _LayerTab extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-  const _LayerTab({required this.icon, required this.label, required this.selected, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) => GestureDetector(
-    onTap: onTap,
-    child: Container(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: selected ? AppColors.accent.withValues(alpha: 0.14) : AppColors.bgCard,
-        border: Border.all(color: selected ? AppColors.accent.withValues(alpha: 0.5) : AppColors.bgBorder),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(icon, size: 15, color: selected ? AppColors.accent : AppColors.textMuted),
-        const SizedBox(width: 6),
-        Text(label, style: TextStyle(
-          color: selected ? AppColors.accent : AppColors.textMuted,
-          fontSize: 12, fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-        )),
-      ]),
-    ),
-  );
 }

@@ -84,25 +84,28 @@ class _RainfallScreenState extends State<RainfallScreen> {
     _fetchRainfall();
   }
 
-  Future<void> _fetchRainfall() async {
-    try {
-      final res = await http.get(Uri.parse(_modelUrl)).timeout(const Duration(seconds: 15));
-      if (!mounted) return;
-      if (res.statusCode == 200) {
-        final j = jsonDecode(res.body) as Map<String, dynamic>;
-        final m = j['live_metrics'] as Map<String, dynamic>? ?? {};
-        final v = m['rainfall_mm'];
-        setState(() {
-          _liveRainfall = v is num ? v.toDouble() : double.tryParse(v?.toString() ?? '');
-          _loading = false;
-        });
-      } else {
-        setState(() => _loading = false);
-      }
-    } catch (_) {
-      if (mounted) setState(() => _loading = false);
+Future<void> _fetchRainfall() async {
+  try {
+    final res = await http.get(Uri.parse(_modelUrl)).timeout(const Duration(seconds: 15));
+    if (!mounted) return;
+    debugPrint('RAINFALL STATUS: ${res.statusCode}');
+    debugPrint('RAINFALL BODY: ${res.body}');   // <-- add this
+    if (res.statusCode == 200) {
+      final j = jsonDecode(res.body) as Map<String, dynamic>;
+      final m = j['live_metrics'] as Map<String, dynamic>? ?? {};
+      final v = m['rainfall_mm'];
+      setState(() {
+        _liveRainfall = v is num ? v.toDouble() : double.tryParse(v?.toString() ?? '');
+        _loading = false;
+      });
+    } else {
+      setState(() => _loading = false);
     }
+  } catch (e, st) {
+    debugPrint('RAINFALL FETCH ERROR: $e');   // <-- add this
+    if (mounted) setState(() => _loading = false);
   }
+}
 
   @override
   Widget build(BuildContext context) {
