@@ -9,6 +9,7 @@ import 'alert_screen.dart';
 import 'evacuation_screen.dart';
 import 'rainfall_screen.dart';
 import 'flood_map_screen.dart';
+import 'community_reports_screen.dart';
 
 class MainShell extends StatefulWidget {
   final int initialTabIndex;
@@ -33,6 +34,7 @@ const _tabMeta = [
   _TabMeta('Flood Map', 'Brgy. Triangulo · Zones & Radar'),
   _TabMeta('Rainfall', 'Brgy. Triangulo · Rain Monitor'),
   _TabMeta('Evacuation', 'Brgy. Triangulo · Evacuation Map'),
+  _TabMeta('Reports', 'Brgy. Triangulo · Resident Reports'),
 ];
 
 class _MainShellState extends State<MainShell> {
@@ -164,6 +166,7 @@ class _MainShellState extends State<MainShell> {
       const FloodMapScreen(),
       const RainfallScreen(),
       const EvacuationScreen(),
+      const CommunityReportsScreen(),
     ];
 
     return Scaffold(
@@ -237,6 +240,7 @@ class _MainShellState extends State<MainShell> {
           PanahonNavItem(icon: Icons.radar_rounded, label: 'Flood Map'),
           PanahonNavItem(icon: Icons.water_drop_rounded, label: 'Rainfall'),
           PanahonNavItem(icon: Icons.directions_run_rounded, label: 'Evacuation'),
+          PanahonNavItem(icon: Icons.campaign_rounded, label: 'Reports'),
         ],
       ),
     );

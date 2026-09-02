@@ -73,6 +73,9 @@ class AgosApp extends StatelessWidget {
         // MainShell handles showing the Alert tab — see note below if you need
         // to deep-link to a specific tab index.
         '/alert': (_) => const MainShell(openAlertsOnStart: true),
+        // Tapped from a "your report was verified" / community-report push —
+        // opens straight into the Reports tab (index 4, see main_shell.dart).
+        '/community-reports': (_) => const MainShell(initialTabIndex: 4),
       },
       home: Consumer<AuthService>(
         builder: (_, auth, __) {

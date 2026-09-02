@@ -102,6 +102,11 @@ class NotificationService {
   Future<void> subscribeToAlerts() async {
     await _messaging.subscribeToTopic('flood_alerts');
     debugPrint('[FCM] Subscribed to flood_alerts topic');  // ← add this
+
+    // Notified when a barangay official verifies a resident-submitted
+    // incident report (see supabase/functions/on-incident-verified).
+    await _messaging.subscribeToTopic('community_reports');
+    debugPrint('[FCM] Subscribed to community_reports topic');
   }
 
   // ── Token management ───────────────────────────────────────────────────────
@@ -142,6 +147,7 @@ class NotificationService {
   // ── Foreground message ─────────────────────────────────────────────────────
   Future<void> _onForegroundMessage(RemoteMessage message) async {
     final level = message.data['level'] as String? ?? 'normal';
+    final type  = message.data['type']  as String? ?? 'alert';
     final title = message.notification?.title ?? '${_emoji(level)} AGOS Alert';
     final body  = message.notification?.body  ?? message.data['message'] ?? '';
 
@@ -166,21 +172,26 @@ class NotificationService {
           presentSound: true,
         ),
       ),
-      payload: level,
+      // Carries the notification "type" (alert vs. community_report) so a
+      // tap on this local notification (see _onNotificationTap below) can
+      // route to the right screen, same as a tap from the system tray.
+      payload: type,
     );
   }
 
   // ── Notification tap handlers ──────────────────────────────────────────────
   void _onNotificationOpened(RemoteMessage message) {
-    navigatorKey.currentState?.pushNamedAndRemoveUntil(
-      '/alert',
-      (route) => route.isFirst,
-    );
+    _routeForType(message.data['type'] as String?);
   }
 
   void _onNotificationTap(NotificationResponse response) {
+    _routeForType(response.payload);
+  }
+
+  void _routeForType(String? type) {
+    final route = type == 'community_report' ? '/community-reports' : '/alert';
     navigatorKey.currentState?.pushNamedAndRemoveUntil(
-      '/alert',
+      route,
       (route) => route.isFirst,
     );
   }
