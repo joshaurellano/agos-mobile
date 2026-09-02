@@ -1,25 +1,3 @@
-// flood_map_screen.dart
-//
-// AGOS's dedicated, full-screen home for the flood situation map. Mirrors
-// the web dashboard's map card: a segmented "2D Map / 3D View" toggle over
-// the barangay flood-zone map (color-coded by current alert level), with the
-// same vertical map-tool stack (zoom / locate / layers) used elsewhere.
-//
-// "3D View" implementation note (rewritten):
-// The previous version faked 3D by capturing a RepaintBoundary screenshot of
-// the flat map and applying a Transform/perspective tilt to that still
-// image. That's gone. This version uses `maplibre_gl` (flutter-maplibre-gl,
-// https://pub.dev/packages/maplibre_gl) to render a REAL tilted vector map —
-// the same engine family (MapLibre GL) your web dashboard's FloodMap3D.jsx
-// already uses, so the visual language matches: a dashed boundary outline
-// plus an extruded, semi-transparent "water slab" whose height/opacity scale
-// with the current alert level.
-//
-// 2D and 3D are two fully separate widgets that get conditionally mounted —
-// same pattern as the web dashboard (`mapView === '2d' ? <FloodMap/> :
-// <FloodMap3D/>`). Nothing wraps or reparents the live FlutterMap anymore,
-// so there's no interaction between the periodic status timer and a
-// mid-rebuild widget-tree change.
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -31,9 +9,17 @@ import 'package:http/http.dart' as http;
 import '../main.dart';
 import '../theme/panahon_ui.dart';
 
-// ─── URL (same backend + fallback used across the app) ────────────────────────
-const _fallbackBaseUrl = 'https://flood-api-553657561163.asia-southeast1.run.app';
-String get _modelUrl => dotenv.env['MODEL_API_URL'] ?? '$_fallbackBaseUrl/api/predict-flood';
+// ─── URL (no fallback — see dashboard_screen.dart for rationale) ──────────────
+String _requireEnv(String key) {
+  final v = dotenv.env[key];
+  if (v == null || v.isEmpty) {
+    throw StateError(
+        'Missing "$key" in .env — check the key name and that .env is loaded/bundled.');
+  }
+  return v;
+}
+
+String get _modelUrl => _requireEnv('MODEL_API_URL');
 
 // ─── Alert colors / labels ──────────────────────────────────────────────────────
 const _alertColors = {
@@ -126,19 +112,37 @@ List<List<double>> _boundaryRing() {
   return ring;
 }
 
+// NOTE (fix): maplibre_gl's native Android layer (mbgl::android::geojson::
+// FeatureCollection::convert) always expects the `data` passed to
+// GeojsonSourceProperties to be a FeatureCollection -- i.e. an object with a
+// top-level 'features' array. A bare 'Feature' (no 'features' key) makes the
+// native converter read a null list and call .toArray() on it, which is an
+// unrecoverable JNI abort (SIGABRT) that kills the whole app process before
+// Flutter ever gets a chance to show an error. Both helpers below must
+// always return a FeatureCollection wrapping a single Feature.
 Map<String, dynamic> _boundaryPolygonGeoJson() => {
-  'type': 'Feature',
-  'properties': {},
-  'geometry': {'type': 'Polygon', 'coordinates': [_boundaryRing()]},
+  'type': 'FeatureCollection',
+  'features': [
+    {
+      'type': 'Feature',
+      'properties': {},
+      'geometry': {'type': 'Polygon', 'coordinates': [_boundaryRing()]},
+    },
+  ],
 };
 
 Map<String, dynamic> _boundaryLineGeoJson() => {
-  'type': 'Feature',
-  'properties': {},
-  'geometry': {
-    'type': 'LineString',
-    'coordinates': _trianguloPolygon.map((p) => [p.longitude, p.latitude]).toList(),
-  },
+  'type': 'FeatureCollection',
+  'features': [
+    {
+      'type': 'Feature',
+      'properties': {},
+      'geometry': {
+        'type': 'LineString',
+        'coordinates': _trianguloPolygon.map((p) => [p.longitude, p.latitude]).toList(),
+      },
+    },
+  ],
 };
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
@@ -182,8 +186,10 @@ class _FloodMapScreenState extends State<FloodMapScreen> {
 
   Future<void> _fetchStatus() async {
     if (!mounted) return;
+    var url = '(unresolved)';
     try {
-      final res = await http.get(Uri.parse(_modelUrl)).timeout(const Duration(seconds: 15));
+      url = _modelUrl;
+      final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 15));
       if (!mounted) return;
       if (res.statusCode == 200) {
         final j = jsonDecode(res.body) as Map<String, dynamic>;
@@ -196,9 +202,11 @@ class _FloodMapScreenState extends State<FloodMapScreen> {
           _loading     = false;
         });
       } else {
+        debugPrint('AGOS: _fetchStatus failed ($url): HTTP ${res.statusCode}');
         if (mounted) setState(() => _loading = false);
       }
-    } catch (_) {
+    } catch (e) {
+      debugPrint('AGOS: _fetchStatus failed ($url): $e');
       if (mounted) setState(() => _loading = false);
     }
   }

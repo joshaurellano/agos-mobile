@@ -5,9 +5,19 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../main.dart';
 import '../theme/panahon_ui.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
-const _modelUrl = 'https://flood-api-553657561163.asia-southeast1.run.app/api/predict-flood';
 
+String _requireEnv(String key) {
+  final v = dotenv.env[key];
+  if (v == null || v.isEmpty) {
+    throw StateError(
+        'Missing "$key" in .env — check the key name and that .env is loaded/bundled.');
+  }
+  return v;
+}
+
+String get _modelUrl => _requireEnv('MODEL_API_URL');
 // ─── PAGASA Thresholds ──────────────────────────────────────────────────────
 class _Threshold {
   final double min, max;

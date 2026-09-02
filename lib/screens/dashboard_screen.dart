@@ -1,15 +1,3 @@
-// dashboard_screen.dart
-//
-// Resident-facing home screen for AGOS. Redesigned to read like a plain
-// weather-forecast app first, technical instrument panel a distant second:
-//
-//   1. Hero card       — today's flood outlook, in plain language
-//   2. Quick stat bar   — rainfall now / estimated water level
-//   3. Hourly Forecast — next 48 hours, straight from Open-Meteo
-//   4. Daily Flood Forecast — the model's actual 14-day forward outlook
-//      (previously unused in this screen — GET /api/forecast-flood)
-//   5. Quick actions, the Alert Levels reference table, and the Rain Map
-//      link live further down, for anyone who wants to dig in.
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -23,23 +11,25 @@ import '../theme/panahon_ui.dart';
 
 // ─── URLs ─────────────────────────────────────────────────────────────────────
 // Read from .env (see README) so the backend can be swapped between
-// dev/staging/prod without touching code. Falls back to the current
-// production Cloud Run service if the keys are missing, so the app still
-// runs for anyone who hasn't updated their .env yet.
-const _fallbackBaseUrl = 'https://flood-api-553657561163.asia-southeast1.run.app';
+// dev/staging/prod without touching code. No fallback: if a key is missing
+// or misspelled in .env, this throws immediately at first use instead of
+// silently hitting some other backend, which makes misconfiguration obvious
+// right away rather than showing up as "forecast unavailable" in the UI.
+String _requireEnv(String key) {
+  final v = dotenv.env[key];
+  if (v == null || v.isEmpty) {
+    throw StateError(
+        'Missing "$key" in .env — check the key name and that .env is loaded/bundled.');
+  }
+  return v;
+}
 
-String get _modelUrl =>
-    dotenv.env['MODEL_API_URL'] ?? '$_fallbackBaseUrl/api/predict-flood';
+String get _modelUrl => _requireEnv('MODEL_API_URL');
 
-String get _forecastUrl =>
-    dotenv.env['FORECAST_API_URL'] ?? '$_fallbackBaseUrl/api/forecast';
+String get _forecastUrl => _requireEnv('FORECAST_API_URL');
 
-// New: the model's own forward-looking 14-day flood forecast. This was
-// already implemented on the backend (GET /api/forecast-flood) but wasn't
-// wired into the dashboard yet — it's the natural data source for a
-// "5-Day/14-Day Forecast" style list.
-String get _forecastFloodUrl =>
-    dotenv.env['FORECAST_FLOOD_API_URL'] ?? '$_fallbackBaseUrl/api/forecast-flood';
+// The model's own forward-looking 14-day flood forecast (GET /api/forecast-flood).
+String get _forecastFloodUrl => _requireEnv('FORECAST_FLOOD_API_URL');
 
 // ─── Alert Colors ─────────────────────────────────────────────────────────────
 const _alertColors = {
@@ -322,8 +312,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void dispose() { _predTimer?.cancel(); super.dispose(); }
 
   Future<void> _fetchPrediction() async {
+    var url = '(unresolved)';
     try {
-      final res = await http.get(Uri.parse(_modelUrl)).timeout(const Duration(seconds: 15));
+      url = _modelUrl;
+      final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 15));
       if (!mounted) return;
       if (res.statusCode == 200) {
         final p = _Prediction.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
@@ -331,8 +323,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           if (mounted) setState(() { _pred = p; _loading = false; _error = false; _lastUpdated = DateTime.now(); });
         });
         widget.onAlertChanged?.call(_alertFromInt(p.alertLevel));
-      } else { throw Exception(); }
+      } else { throw Exception('HTTP ${res.statusCode}'); }
     } catch (e) {
+      debugPrint('AGOS: _fetchPrediction failed ($url): $e');
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) setState(() { _loading = false; _error = true; });
       });
@@ -340,8 +333,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _fetchHourly() async {
+    var url = '(unresolved)';
     try {
-      final res = await http.get(Uri.parse(_forecastUrl)).timeout(const Duration(seconds: 15));
+      url = _forecastUrl;
+      final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 15));
       if (!mounted) return;
       if (res.statusCode == 200) {
         final body = jsonDecode(res.body) as Map<String, dynamic>;
@@ -351,8 +346,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
             _hourlyLoading = false;
           });
         });
-      } else { throw Exception(); }
-    } catch (_) {
+      } else { throw Exception('HTTP ${res.statusCode}'); }
+    } catch (e) {
+      debugPrint('AGOS: _fetchHourly failed ($url): $e');
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) setState(() => _hourlyLoading = false);
       });
@@ -360,8 +356,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _fetchDailyFlood() async {
+    var url = '(unresolved)';
     try {
-      final res = await http.get(Uri.parse(_forecastFloodUrl)).timeout(const Duration(seconds: 15));
+      url = _forecastFloodUrl;
+      final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 15));
       if (!mounted) return;
       if (res.statusCode == 200) {
         final body = jsonDecode(res.body) as Map<String, dynamic>;
@@ -376,8 +374,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         } else {
           throw Exception(body['message']?.toString() ?? 'unknown error');
         }
-      } else { throw Exception(); }
-    } catch (_) {
+      } else { throw Exception('HTTP ${res.statusCode}'); }
+    } catch (e) {
+      debugPrint('AGOS: _fetchDailyFlood failed ($url): $e');
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) setState(() { _dailyLoading = false; _dailyError = true; });
       });

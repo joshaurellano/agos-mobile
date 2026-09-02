@@ -20,6 +20,12 @@ class _EvacCenter {
   });
 }
 
+// Colors mirror the web dashboard: Primary = red, School = blue, so the
+// marker/card color itself communicates the center's role at a glance
+// instead of every pin looking identical.
+const _colorPrimary = Color(0xFFDC143C);
+const _colorSchool  = Color(0xFF3B82F6);
+
 const _centers = [
   _EvacCenter(
     id: 'jesse-robredo',
@@ -27,7 +33,7 @@ const _centers = [
     type: 'Primary Evacuation Center',
     note: 'Ninoy and Cory Avenue, corner Carnation Street, Barangay Triangulo, Naga City',
     lat: 13.620122, lng: 123.188095,
-    color: Color(0xFFDC143C),
+    color: _colorPrimary,
   ),
   _EvacCenter(
     id: 'triangulo-elem',
@@ -35,7 +41,7 @@ const _centers = [
     type: 'School Evacuation Center',
     note: 'Roxas Ave. Diversion Rd. Barangay Triangulo, Naga City',
     lat: 13.6165193, lng: 123.1878926,
-    color: Color(0xFFDC143C),
+    color: _colorSchool,
   ),
   _EvacCenter(
     id: 'jose-rizal-elem',
@@ -43,7 +49,7 @@ const _centers = [
     type: 'School Evacuation Center',
     note: 'Ilang Ilang St., Naga City Subd., Zone 1, Brgy. Triangulo, Naga City',
     lat: 13.6194395, lng: 123.1933071,
-    color: Color(0xFFDC143C),
+    color: _colorSchool,
   ),
 ];
 
@@ -129,7 +135,6 @@ class _EvacuationScreenState extends State<EvacuationScreen> {
   LatLng? _userLocation;
   bool _locating = false;
   String? _locError;
-  bool? _isInFloodZone;
 
   // Nearest center
   _EvacCenter? _nearest;
@@ -233,7 +238,6 @@ class _EvacuationScreenState extends State<EvacuationScreen> {
         _userLocation = userLatLng;
         _nearest = nearest;
         _nearestDist = nearestDist;
-        _isInFloodZone = inZone;
         _locating = false;
         _selectedCenterId = nearest?.id;
       });
@@ -464,82 +468,87 @@ class _EvacuationScreenState extends State<EvacuationScreen> {
               ),
             ),
 
-            // ── Nearest center banner ──────────────────────────────────────
-            if (_nearest != null && _nearestDist != null)
+            // ── Nearest center info (name/distance + address) ───────────────
+            // Both banners live in one Column now instead of two separately
+            // Positioned widgets at fixed offsets — a long center name used
+            // to wrap to 2 lines and get clipped by the address banner below
+            // it, since that banner assumed the first one was always 60px
+            // tall. Stacking them in a Column sizes each to its real content
+            // height, so nothing overlaps regardless of name length.
+            if (_nearest != null)
               Positioned(
                 top: _bannerTop, left: 12, right: 60,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF052e16).withValues(alpha: 0.95),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: const Color(0xFF22C55E).withValues(alpha: 0.6)),
-                    boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.4), blurRadius: 12)],
-                  ),
-                  child: Row(children: [
-                    const Icon(Icons.navigation_rounded, color: Color(0xFF22C55E), size: 18),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        const Text('NEAREST EVACUATION CENTER',
-                            style: TextStyle(color: Color(0xFF22C55E), fontSize: 8,
-                                fontWeight: FontWeight.w800, letterSpacing: 0.8)),
-                        const SizedBox(height: 2),
-                        Text(_nearest!.name,
-                            style: const TextStyle(color: Color(0xFFe2eaf5), fontSize: 12, fontWeight: FontWeight.w700)),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (_nearestDist != null)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF052e16).withValues(alpha: 0.95),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: const Color(0xFF22C55E).withValues(alpha: 0.6)),
+                          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.4), blurRadius: 12)],
+                        ),
+                        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          const Icon(Icons.navigation_rounded, color: Color(0xFF22C55E), size: 18),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              const Text('NEAREST EVACUATION CENTER',
+                                  style: TextStyle(color: Color(0xFF22C55E), fontSize: 8,
+                                      fontWeight: FontWeight.w800, letterSpacing: 0.8)),
+                              const SizedBox(height: 2),
+                              Text(_nearest!.name,
+                                  style: const TextStyle(color: Color(0xFFe2eaf5), fontSize: 12, fontWeight: FontWeight.w700)),
+                            ]),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF22C55E).withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: const Color(0xFF22C55E).withValues(alpha: 0.4)),
+                            ),
+                            child: Text(
+                              _formatDistance(_nearestDist!),
+                              style: const TextStyle(color: Color(0xFF22C55E), fontSize: 11, fontWeight: FontWeight.w800),
+                            ),
+                          ),
+                        ]),
+                      ),
+                    const SizedBox(height: 8),
+                    // Address of the nearest center — replaces the old "flood
+                    // zone" banner, since that polygon is just the barangay
+                    // boundary, not an actual flood zone, so labeling it that
+                    // way was misleading. This is more useful in that slot.
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0d1f3c).withValues(alpha: 0.97),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: const Color(0xFF1e3a5f)),
+                        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.4), blurRadius: 12)],
+                      ),
+                      child: Row(children: [
+                        const Icon(Icons.location_on_outlined, color: Color(0xFF4a6080), size: 14),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _nearest!.note,
+                            style: const TextStyle(
+                              color: Color(0xFF8da4be),
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
                       ]),
                     ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF22C55E).withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(color: const Color(0xFF22C55E).withValues(alpha: 0.4)),
-                      ),
-                      child: Text(
-                        _formatDistance(_nearestDist!),
-                        style: const TextStyle(color: Color(0xFF22C55E), fontSize: 11, fontWeight: FontWeight.w800),
-                      ),
-                    ),
-                  ]),
-                ),
-              ),
-
-            // ── Flood zone banner ──────────────────────────────────────────
-            if (_isInFloodZone != null)
-              Positioned(
-                top: _nearest != null ? _bannerTop + 60 : _bannerTop,
-                left: 12,
-                right: 60,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 400),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: _isInFloodZone!
-                        ? const Color(0xFF450a0a).withValues(alpha: 0.97)
-                        : const Color(0xFF052e16).withValues(alpha: 0.97),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                      color: _isInFloodZone!
-                          ? const Color(0xFFef4444).withValues(alpha: 0.7)
-                          : const Color(0xFF22C55E).withValues(alpha: 0.7),
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: (_isInFloodZone! ? const Color(0xFFef4444) : const Color(0xFF22C55E))
-                            .withValues(alpha: 0.2),
-                        blurRadius: 12,
-                      ),
-                    ],
-                  ),
-                  child: Row(children: [
-                    Icon(
-                      _isInFloodZone! ? Icons.warning_amber_rounded : Icons.check_circle_outline_rounded,
-                      color: _isInFloodZone! ? const Color(0xFFef4444) : const Color(0xFF22C55E),
-                      size: 16,
-                    ),
-                   
-                  ]),
+                  ],
                 ),
               ),
 
@@ -563,9 +572,17 @@ class _EvacuationScreenState extends State<EvacuationScreen> {
                     const SizedBox(height: 8),
                     Row(children: [
                       Container(width: 10, height: 10,
-                          decoration: const BoxDecoration(color: Color(0xFFDC143C), shape: BoxShape.circle)),
+                          decoration: const BoxDecoration(color: _colorPrimary, shape: BoxShape.circle)),
                       const SizedBox(width: 7),
-                      const Expanded(child: Text('Evacuation Center',
+                      const Expanded(child: Text('Primary Center',
+                          style: TextStyle(color: AppColors.textSec, fontSize: 10.5))),
+                    ]),
+                    const SizedBox(height: 6),
+                    Row(children: [
+                      Container(width: 10, height: 10,
+                          decoration: const BoxDecoration(color: _colorSchool, shape: BoxShape.circle)),
+                      const SizedBox(width: 7),
+                      const Expanded(child: Text('School Center',
                           style: TextStyle(color: AppColors.textSec, fontSize: 10.5))),
                     ]),
                     const SizedBox(height: 6),
@@ -702,7 +719,10 @@ class _EvacuationScreenState extends State<EvacuationScreen> {
             controller: _scrollController,
             padding: const EdgeInsets.fromLTRB(14, 14, 14, 24),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const _SectionLabel(icon: '🏫', text: 'Evacuation Route Map — Barangay Triangulo'),
+              const _SectionLabel(icon: '🚨', text: 'Evacuation Route Map — Barangay Triangulo'),
+              const SizedBox(height: 4),
+              const Text('Tap a marker on the map, or a card below, for details.',
+                  style: TextStyle(color: Color(0xFF4a6080), fontSize: 10.5)),
               const SizedBox(height: 12),
 
               // ── Selected center detail card (replaces map popup) ──────────
@@ -811,7 +831,7 @@ class _EvacuationScreenState extends State<EvacuationScreen> {
             ),
             child: Icon(
               isNearest ? Icons.navigation_rounded : Icons.location_on_rounded,
-              color: isNearest ? const Color(0xFF22C55E) : const Color(0xFFDC143C),
+              color: isNearest ? const Color(0xFF22C55E) : c.color,
               size: 20,
             ),
           ),
@@ -848,71 +868,81 @@ class _EvacuationScreenState extends State<EvacuationScreen> {
                         color: c.color, fontSize: 9, fontWeight: FontWeight.w700)),
               ),
               const SizedBox(height: 8),
-              Text(c.note,
-                  style: const TextStyle(
-                      color: Color(0xFF8da4be), fontSize: 11.5, height: 1.5)),
-              const SizedBox(height: 8),
-              // Coordinates + copy row
+              // Address + coordinates, as labeled rows in one info box
+              // (mirrors the web dashboard's detail-card layout).
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
                 decoration: BoxDecoration(
                   color: const Color(0xFF0a1828),
                   borderRadius: BorderRadius.circular(6),
                   border: Border.all(color: const Color(0xFF1e3a5f)),
                 ),
-                child: Row(children: [
-                  const Icon(Icons.location_on_outlined,
-                      color: Color(0xFF4a6080), size: 13),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      '${c.lat.toStringAsFixed(4)}, ${c.lng.toStringAsFixed(4)}',
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('ADDRESS',
+                      style: TextStyle(color: Color(0xFF4a6080), fontSize: 8.5,
+                          fontWeight: FontWeight.w800, letterSpacing: 0.8)),
+                  const SizedBox(height: 3),
+                  Text(c.note,
                       style: const TextStyle(
-                          color: Color(0xFF4a6080),
-                          fontSize: 10,
-                          fontFamily: 'monospace'),
-                    ),
-                  ),
-                  GestureDetector(
-                    onTap: () {
-                      Clipboard.setData(ClipboardData(
-                          text:
-                              '${c.lat.toStringAsFixed(6)}, ${c.lng.toStringAsFixed(6)}'));
-                      HapticFeedback.lightImpact();
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('Coordinates copied — ${c.name}',
-                              style: const TextStyle(fontSize: 12)),
-                          backgroundColor: const Color(0xFF0d1f3c),
-                          behavior: SnackBarBehavior.floating,
-                          duration: const Duration(seconds: 2),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8)),
-                        ),
-                      );
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 6, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF38bdf8).withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(
-                            color:
-                                const Color(0xFF38bdf8).withValues(alpha: 0.3)),
+                          color: Color(0xFF8da4be), fontSize: 11.5, height: 1.5)),
+                  const SizedBox(height: 9),
+                  Container(height: 1, color: const Color(0xFF1e3a5f)),
+                  const SizedBox(height: 9),
+                  const Text('COORDINATES',
+                      style: TextStyle(color: Color(0xFF4a6080), fontSize: 8.5,
+                          fontWeight: FontWeight.w800, letterSpacing: 0.8)),
+                  const SizedBox(height: 3),
+                  Row(children: [
+                    Expanded(
+                      child: Text(
+                        '${c.lat.toStringAsFixed(4)}, ${c.lng.toStringAsFixed(4)}',
+                        style: const TextStyle(
+                            color: Color(0xFF8da4be),
+                            fontSize: 11,
+                            fontFamily: 'monospace'),
                       ),
-                      child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                        Icon(Icons.copy_rounded,
-                            color: Color(0xFF38bdf8), size: 10),
-                        SizedBox(width: 3),
-                        Text('Copy',
-                            style: TextStyle(
-                                color: Color(0xFF38bdf8),
-                                fontSize: 9,
-                                fontWeight: FontWeight.w700)),
-                      ]),
                     ),
-                  ),
+                    GestureDetector(
+                      onTap: () {
+                        Clipboard.setData(ClipboardData(
+                            text:
+                                '${c.lat.toStringAsFixed(6)}, ${c.lng.toStringAsFixed(6)}'));
+                        HapticFeedback.lightImpact();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('Coordinates copied — ${c.name}',
+                                style: const TextStyle(fontSize: 12)),
+                            backgroundColor: const Color(0xFF0d1f3c),
+                            behavior: SnackBarBehavior.floating,
+                            duration: const Duration(seconds: 2),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8)),
+                          ),
+                        );
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF38bdf8).withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(
+                              color:
+                                  const Color(0xFF38bdf8).withValues(alpha: 0.3)),
+                        ),
+                        child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(Icons.copy_rounded,
+                              color: Color(0xFF38bdf8), size: 10),
+                          SizedBox(width: 3),
+                          Text('Copy',
+                              style: TextStyle(
+                                  color: Color(0xFF38bdf8),
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w700)),
+                        ]),
+                      ),
+                    ),
+                  ]),
                 ]),
               ),
               if (dist != null) ...[
@@ -1036,96 +1066,99 @@ class _CenterCard extends StatelessWidget {
             ),
           ]),
           const SizedBox(height: 10),
-          Text(center.note,
-              style: const TextStyle(
-                  color: Color(0xFF8da4be), fontSize: 12, height: 1.5)),
-          const SizedBox(height: 10),
+          // Address + coordinates, as labeled rows in one info box
+          // (mirrors the web dashboard's card layout).
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
             decoration: BoxDecoration(
               color: const Color(0xFF0a1828),
               borderRadius: BorderRadius.circular(6),
               border: Border.all(color: const Color(0xFF1e3a5f)),
             ),
-            child: Row(children: [
-              const Icon(Icons.location_on_outlined,
-                  color: Color(0xFF4a6080), size: 14),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  '${center.lat.toStringAsFixed(4)}, ${center.lng.toStringAsFixed(4)}',
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('ADDRESS',
+                  style: TextStyle(color: Color(0xFF4a6080), fontSize: 8.5,
+                      fontWeight: FontWeight.w800, letterSpacing: 0.8)),
+              const SizedBox(height: 3),
+              Text(center.note,
                   style: const TextStyle(
-                      color: Color(0xFF4a6080),
-                      fontSize: 11,
-                      fontFamily: 'monospace'),
-                ),
-              ),
-              GestureDetector(
-                onTap: () {
-                  Clipboard.setData(ClipboardData(
-                      text:
-                          '${center.lat.toStringAsFixed(6)}, ${center.lng.toStringAsFixed(6)}'));
-                  HapticFeedback.lightImpact();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('Coordinates copied — ${center.name}',
-                          style: const TextStyle(fontSize: 12)),
-                      backgroundColor: const Color(0xFF0d1f3c),
-                      behavior: SnackBarBehavior.floating,
-                      duration: const Duration(seconds: 2),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8)),
-                    ),
-                  );
-                },
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF38bdf8).withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(
-                        color: const Color(0xFF38bdf8).withValues(alpha: 0.3)),
-                  ),
-                  child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                    Icon(Icons.copy_rounded,
-                        color: Color(0xFF38bdf8), size: 10),
-                    SizedBox(width: 3),
-                    Text('Copy',
-                        style: TextStyle(
-                            color: Color(0xFF38bdf8),
-                            fontSize: 9,
-                            fontWeight: FontWeight.w700)),
-                  ]),
-                ),
-              ),
-              if (distanceMeters != null) ...[
-                const SizedBox(width: 8),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: isNearest
-                        ? const Color(0xFF22C55E).withValues(alpha: 0.1)
-                        : const Color(0xFF1e3a5f),
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(
-                        color: isNearest
-                            ? const Color(0xFF22C55E).withValues(alpha: 0.4)
-                            : const Color(0xFF2a4a6f)),
-                  ),
+                      color: Color(0xFF8da4be), fontSize: 12, height: 1.5)),
+              const SizedBox(height: 9),
+              Container(height: 1, color: const Color(0xFF1e3a5f)),
+              const SizedBox(height: 9),
+              const Text('COORDINATES',
+                  style: TextStyle(color: Color(0xFF4a6080), fontSize: 8.5,
+                      fontWeight: FontWeight.w800, letterSpacing: 0.8)),
+              const SizedBox(height: 3),
+              Row(children: [
+                Expanded(
                   child: Text(
-                    _formatDistance(distanceMeters!),
-                    style: TextStyle(
-                        color: isNearest
-                            ? const Color(0xFF22C55E)
-                            : const Color(0xFF8da4be),
-                        fontSize: 10,
-                        fontWeight: FontWeight.w700),
+                    '${center.lat.toStringAsFixed(4)}, ${center.lng.toStringAsFixed(4)}',
+                    style: const TextStyle(
+                        color: Color(0xFF8da4be),
+                        fontSize: 11,
+                        fontFamily: 'monospace'),
                   ),
                 ),
-              ],
+                GestureDetector(
+                  onTap: () {
+                    Clipboard.setData(ClipboardData(
+                        text:
+                            '${center.lat.toStringAsFixed(6)}, ${center.lng.toStringAsFixed(6)}'));
+                    HapticFeedback.lightImpact();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Coordinates copied — ${center.name}',
+                            style: const TextStyle(fontSize: 12)),
+                        backgroundColor: const Color(0xFF0d1f3c),
+                        behavior: SnackBarBehavior.floating,
+                        duration: const Duration(seconds: 2),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                      ),
+                    );
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF38bdf8).withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(
+                          color: const Color(0xFF38bdf8).withValues(alpha: 0.3)),
+                    ),
+                    child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.copy_rounded,
+                          color: Color(0xFF38bdf8), size: 10),
+                      SizedBox(width: 3),
+                      Text('Copy',
+                          style: TextStyle(
+                              color: Color(0xFF38bdf8),
+                              fontSize: 9,
+                              fontWeight: FontWeight.w700)),
+                    ]),
+                  ),
+                ),
+              ]),
             ]),
           ),
+          if (distanceMeters != null) ...[
+            const SizedBox(height: 8),
+            Row(children: [
+              Icon(Icons.directions_walk_rounded,
+                  color: isNearest ? const Color(0xFF22C55E) : const Color(0xFF8da4be),
+                  size: 13),
+              const SizedBox(width: 5),
+              Text(
+                '${_formatDistance(distanceMeters!)} away',
+                style: TextStyle(
+                    color: isNearest
+                        ? const Color(0xFF22C55E)
+                        : const Color(0xFF8da4be),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700),
+              ),
+            ]),
+          ],
         ]),
       ),
     );
