@@ -48,13 +48,6 @@ class AlertLevel {
       type: AlertLevelType.critical,
     ),
   };
-
-  static AlertLevelType fromWaterLevel(double level) {
-    if (level >= 4.5) return AlertLevelType.critical;
-    if (level >= 3.5) return AlertLevelType.warning;
-    if (level >= 2.5) return AlertLevelType.advisory;
-    return AlertLevelType.normal;
-  }
 }
 
 // ─── AlertLevelTypeX ────────────────────────────────────────────────────────

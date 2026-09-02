@@ -4,7 +4,7 @@
 // weather-forecast app first, technical instrument panel a distant second:
 //
 //   1. Hero card       — today's flood outlook, in plain language
-//   2. Quick stat bar   — rainfall now / estimated water level
+//   2. Quick stat bar   — rainfall now / humidity
 //   3. Hourly Forecast — next 48 hours, straight from Open-Meteo
 //   4. Daily Flood Forecast — the model's actual 14-day forward outlook
 //      (previously unused in this screen — GET /api/forecast-flood)
@@ -421,7 +421,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             const SizedBox(height: 10),
 
             // 1 — Hero: today's outlook, in plain language, with the
-            // rainfall/water-level quick-stat bar baked in underneath it.
+            // rainfall/humidity quick-stat bar baked in underneath it.
             _SafetyHeroCard(
               alertKey: _currentAlertKey,
               alertColor: _alertColor,
@@ -647,7 +647,7 @@ class _SafetyHeroCard extends StatelessWidget {
           ]),
         ),
 
-        // Quick-stat bar — rainfall now / estimated water level, laid out
+        // Quick-stat bar — rainfall now / humidity, laid out
         // like a weather app's "RAIN | HEAT INDEX" strip under the headline.
         Container(
           padding: const EdgeInsets.symmetric(vertical: 12),
